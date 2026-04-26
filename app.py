@@ -34,6 +34,15 @@ st.markdown("""
   }
   [data-testid="stSidebar"] * { font-family: 'Manrope', sans-serif !important; }
 
+  /* Hide sidebar toggle/collapse buttons */
+  [data-testid="collapsedControl"],
+  [data-testid="stSidebarCollapseButton"],
+  [data-testid="stSidebarHeader"] button,
+  section[data-testid="stSidebar"] button[aria-label="Collapse sidebar"],
+  button[kind="header"] {
+    display: none !important;
+  }
+
   .bipv-header {
     font-family: 'Manrope', sans-serif;
     font-size: 1.6rem;
@@ -492,3 +501,71 @@ if vf and extras and sol['cos_z'] > 0:
             ("Shaded wall bounce",    f"{extras['term_sh']:.2f}",  "W/m²"),
             ("Unshaded wall bounce",  f"{extras['term_ush']:.2f}", "W/m²"),
         ]), unsafe_allow_html=True)
+
+
+# ─── Hourly Irradiance Profile Chart ──────────────────────────────────────────
+import pandas as st_pd
+
+@st.cache_data
+def load_irradiance_data():
+    return st_pd.read_csv("Taxila_Irradiance_Data.csv")
+
+df_irr = load_irradiance_data()
+
+# Filter for the selected month and day
+df_day = df_irr[(df_irr['Month'] == month_idx) & (df_irr['Day'] == int(sel_day))]
+
+if not df_day.empty:
+    st.markdown('<br><div class="sec-title" style="margin-top: 2rem;">Hourly Irradiance Profile</div>', unsafe_allow_html=True)
+    
+    hours = []
+    g_h_list = []
+    gd_h_list = []
+    gf_list = []
+    gr_list = []
+    gt_list = []
+    
+    for _, row in df_day.iterrows():
+        h_taxila = row['Hour Taxila']
+        g_h = row['G(h)']
+        gd_h = row['Gd(h)']
+        
+        # Calculate BIPV components for this hour using the CSV's G(h) and Gd(h)
+        # Note: h_taxila is an integer (0-23), we use it as LCT
+        curr_sol, curr_vf, curr_extras, curr_gf, curr_gr = compute_irradiance(
+            sel_date, h_taxila, g_h, gd_h, latitude, lambda_std, lambda_lcl,
+            H_b, h, H_p, d, rho_grd, rho_w
+        )
+        
+        hours.append(h_taxila)
+        g_h_list.append(g_h)
+        gd_h_list.append(gd_h)
+        gf_list.append(curr_gf)
+        gr_list.append(curr_gr)
+        gt_list.append(curr_gf + curr_gr)
+
+    import plotly.graph_objects as go
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(x=hours, y=g_h_list, mode='lines+markers', name='G(h)', line=dict(color='#9ca3af', width=2)))
+    fig.add_trace(go.Scatter(x=hours, y=gd_h_list, mode='lines+markers', name='Gd(h)', line=dict(color='#d1d5db', width=2, dash='dot')))
+    fig.add_trace(go.Scatter(x=hours, y=gf_list, mode='lines+markers', name='GF', line=dict(color='#0f766e', width=3)))
+    fig.add_trace(go.Scatter(x=hours, y=gr_list, mode='lines+markers', name='GR', line=dict(color='#7c3aed', width=3)))
+    fig.add_trace(go.Scatter(x=hours, y=gt_list, mode='lines+markers', name='GT (GF+GR)', line=dict(color='#ea580c', width=3)))
+    
+    selected_hour_val = hr + mn/60.0
+    fig.add_vline(x=selected_hour_val, line_width=2, line_dash="dash", line_color="#4338ca", annotation_text="Selected Time")
+    
+    fig.update_layout(
+        xaxis_title='Hour (Taxila Time)',
+        yaxis_title='Irradiance (W/m²)',
+        margin=dict(l=40, r=40, t=40, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='#f1f5f9', tickmode='linear', tick0=0, dtick=1),
+        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='#f1f5f9')
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
