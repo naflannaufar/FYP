@@ -1,7 +1,4 @@
-import math
 import streamlit as st
-from datetime import date
-import calendar
 
 # ─── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -273,299 +270,147 @@ st.markdown("""
   }
 
   #MainMenu, footer, header { visibility: hidden; }
+
+  /* Sidebar Back Button styling */
+  section[data-testid="stSidebar"] .stButton > button {
+    background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-family: 'Manrope', sans-serif !important;
+    font-weight: 700 !important;
+    padding: 10px 16px !important;
+    transition: all 0.2s ease !important;
+    box-shadow: 0 4px 10px rgba(15,118,110,0.2) !important;
+    margin-bottom: 1rem !important;
+  }
+  section[data-testid="stSidebar"] .stButton > button:hover {
+    background: linear-gradient(135deg, #115e59 0%, #0f766e 100%) !important;
+    box-shadow: 0 6px 15px rgba(15,118,110,0.3) !important;
+    transform: translateY(-1px) !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─── Core Math ────────────────────────────────────────────────────────────────
-DEG_TO_RAD = math.pi / 180.0
-RAD_TO_DEG = 180.0 / math.pi
-
-def d2r(a): return a * DEG_TO_RAD
-def r2d(a): return a * RAD_TO_DEG
-
-def solar_position(date_obj, LCT, latitude, lambda_std, lambda_lcl):
-    n = date_obj.timetuple().tm_yday
-    delta_deg = 23.45 * math.sin(d2r(360.0 * (284 + n) / 365.0))
-    B_rad = d2r(360.0 * (n - 1) / 365.0)
-    EoT = 229.2 * (0.000075 + 0.001868 * math.cos(B_rad) - 0.032077 * math.sin(B_rad)
-                   - 0.014615 * math.cos(2 * B_rad) - 0.04089 * math.sin(2 * B_rad))
-    LST = LCT + (4.0 * (lambda_std - lambda_lcl) + EoT) / 60.0
-    omega_deg = 15.0 * (LST - 12.0)
-    phi_rad, delta_rad, omega_rad = d2r(latitude), d2r(delta_deg), d2r(omega_deg)
-    cos_z = max(-1.0, min(1.0,
-        math.sin(phi_rad) * math.sin(delta_rad) +
-        math.cos(phi_rad) * math.cos(delta_rad) * math.cos(omega_rad)))
-    theta_z = r2d(math.acos(cos_z))
-    return {
-        'n': n, 'delta': delta_deg, 'EoT': EoT, 'LST': LST,
-        'omega': omega_deg, 'cos_z': cos_z, 'theta_z': theta_z,
-        'alpha_s': 90.0 - theta_z
-    }
-
-def aoi_front(sol, latitude, tilt=90.0, panel_az=0.0):
-    d, p, b, g, w = d2r(sol['delta']), d2r(latitude), d2r(tilt), d2r(panel_az), d2r(sol['omega'])
-    sd, cd = math.sin(d), math.cos(d)
-    sp, cp = math.sin(p), math.cos(p)
-    sb, cb = math.sin(b), math.cos(b)
-    sg, cg = math.sin(g), math.cos(g)
-    sw, cw = math.sin(w), math.cos(w)
-    cos_theta_F = (sd*sp*cb) - (sd*cp*sb*cg) + (cd*cp*cb*cw) + (cd*sp*sb*cg*cw) + (cd*sb*sg*sw)
-    return max(-1.0, min(1.0, cos_theta_F))
-
-def view_factors(H_b, h, H_p, d, alpha_s):
-    L = H_b - H_p - h
-    XR_sky = (H_p + math.sqrt(d**2 + L**2) - math.sqrt(d**2 + (H_p + L)**2)) / (2 * H_p)
-    XR_grd = (H_p + math.sqrt(d**2 + h**2) - math.sqrt(d**2 + (H_p + h)**2)) / (2 * H_p)
-    if 0 < alpha_s < 90:
-        Delta = d * math.tan(d2r(alpha_s))
-    elif alpha_s >= 90:
-        Delta = 1e6
-    else:
-        Delta = 0.0
-    t1 = math.sqrt(d**2 + (H_p - Delta)**2)
-    t2 = math.sqrt(d**2 + (H_p + Delta)**2)
-    t3 = 2 * math.sqrt(d**2 + Delta**2)
-    XR_sh_w = max(0.0, min(1.0, (t1 + t2 - t3) / (2 * H_p)))
-    XR_ush_w = max(0.0, 1.0 - XR_sky - XR_grd - XR_sh_w)
-    return {
-        'L': L, 'Delta': Delta,
-        'XF_sky': 0.5, 'XF_grd': 0.5,
-        'XR_sky': XR_sky, 'XR_grd': XR_grd,
-        'XR_sh_w': XR_sh_w, 'XR_ush_w': XR_ush_w
-    }
-
-def compute_irradiance(date_obj, LCT, GHI, DHI, latitude, lambda_std, lambda_lcl,
-                        H_b, h, H_p, d, rho_grd, rho_w):
-    sol = solar_position(date_obj, LCT, latitude, lambda_std, lambda_lcl)
-    if sol['cos_z'] <= 0:
-        return sol, None, None, 0.0, 0.0
-
-    cos_theta_F = aoi_front(sol, latitude)
-    theta_F = r2d(math.acos(cos_theta_F))
-    RbF = (max(0.0, cos_theta_F) / sol['cos_z']
-           if (-90 <= sol['omega'] <= 90 and sol['cos_z'] > 0) else 0.0)
-    vf = view_factors(H_b, h, H_p, d, sol['alpha_s'])
-
-    BHI = GHI - DHI
-    GF = (BHI * RbF) + (DHI * vf['XF_sky']) + (GHI * rho_grd * vf['XF_grd'])
-    term_sky = DHI * vf['XR_sky']
-    term_grd = GHI * rho_grd * vf['XR_grd']
-    term_sh  = ((DHI / 2.0) + (GHI * rho_grd / 2.0)) * rho_w * vf['XR_sh_w']
-    term_ush = GF * rho_w * vf['XR_ush_w']
-    GR = term_sky + term_grd + term_sh + term_ush
-
-    extras = {
-        'BHI': BHI, 'theta_F': theta_F, 'cos_theta_F': cos_theta_F, 'RbF': RbF,
-        'term_sky': term_sky, 'term_grd': term_grd, 'term_sh': term_sh, 'term_ush': term_ush
-    }
-    return sol, vf, extras, GF, GR
+# ─── Session State for Navigation ──────────────────────────────────────────────
+if "page" not in st.session_state:
+    st.session_state.page = "home"
 
 
-# ─── Sidebar Inputs ────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown('<div class="bipv-header">☀ BIPV</div>', unsafe_allow_html=True)
-    st.markdown('<div class="bipv-sub">Irradiance Calculator</div>', unsafe_allow_html=True)
+# ─── Page Router ───────────────────────────────────────────────────────────────
+if st.session_state.page == "home":
+    # Hide sidebar + disable scroll on home
+    st.markdown("""
+    <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        [data-testid="stSidebarCollapsedControl"] { display: none !important; }
 
-    st.markdown('<div class="section-label">① Date & Time</div>', unsafe_allow_html=True)
-    month_names = list(calendar.month_name)[1:]
-    col_m, col_d = st.columns(2)
-    with col_m:
-        sel_month = st.selectbox("Month", month_names, index=11)
-    month_idx = month_names.index(sel_month) + 1
-    max_day = calendar.monthrange(2025, month_idx)[1]
-    with col_d:
-        sel_day = st.number_input("Day", min_value=1, max_value=max_day, value=min(21, max_day))
-    sel_date = date(2025, month_idx, int(sel_day))
+        /* Lock viewport – no scroll */
+        html, body, [data-testid="stApp"],
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"] {
+            overflow: hidden !important;
+            height: 100vh !important;
+        }
+        .block-container {
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            height: 100vh;
+        }
 
-    col_h, col_min = st.columns(2)
-    with col_h:
-        hr = st.number_input("Hour", 0, 23, 12)
-    with col_min:
-        mn = st.number_input("Min", 0, 59, 0, step=15)
-    LCT = hr + mn / 60.0
+        /* ── Home title ── */
+        .home-title {
+            font-family: 'Manrope', sans-serif;
+            font-size: 2.4rem;
+            font-weight: 900;
+            color: #1a1a2e;
+            text-align: center;
+            letter-spacing: -0.8px;
+            margin-bottom: 2rem;
+        }
 
-    st.markdown('<div class="section-label">② Irradiance (W/m²)</div>', unsafe_allow_html=True)
-    GHI = st.number_input("GHI – Global Horizontal", 0.0, 1500.0, 800.0, 10.0)
-    DHI = st.number_input("DHI – Diffuse Horizontal", 0.0, 800.0, 150.0, 10.0)
+        /* ── Teal buttons – target ALL buttons on home page ── */
+        .stButton > button {
+            width: 100% !important;
+            background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%) !important;
+            color: #ffffff !important;
+            font-family: 'Manrope', sans-serif !important;
+            font-size: 1.15rem !important;
+            font-weight: 700 !important;
+            border: none !important;
+            border-radius: 14px !important;
+            padding: 22px 20px !important;
+            min-height: 70px !important;
+            cursor: pointer !important;
+            transition: all 0.25s ease !important;
+            box-shadow: 0 4px 14px rgba(15,118,110,0.25) !important;
+            letter-spacing: 0.2px !important;
+        }
+        .stButton > button:hover {
+            background: linear-gradient(135deg, #115e59 0%, #0f766e 100%) !important;
+            box-shadow: 0 6px 20px rgba(15,118,110,0.35) !important;
+            transform: translateY(-2px) !important;
+        }
+        .stButton > button:active {
+            transform: translateY(0) !important;
+        }
 
-    st.markdown('<div class="section-label">③ Location</div>', unsafe_allow_html=True)
-    latitude   = st.number_input("Latitude φ (°)", -90.0, 90.0, 33.7, 0.5)
-    lambda_std = st.number_input("Standard Longitude λstd (°)", -180.0, 180.0, 75.0, 1.0)
-    lambda_lcl = st.number_input("Local Longitude λlcl (°)", -180.0, 180.0, 73.1, 0.1)
+        /* ── Description card ── */
+        .home-desc {
+            background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%);
+            border-radius: 16px;
+            padding: 32px 40px;
+            margin-top: 2rem;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(15,118,110,0.2);
+        }
+        .home-desc p {
+            font-family: 'Manrope', sans-serif;
+            font-size: 1.05rem;
+            font-weight: 500;
+            color: #ffffff;
+            line-height: 1.8;
+            margin: 0;
+            letter-spacing: 0.2px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
-    st.markdown('<div class="section-label">④ Building Geometry (m)</div>', unsafe_allow_html=True)
-    H_b = st.number_input("Building Height Hb", 0.5, 200.0, 10.0, 0.5)
-    h   = st.number_input("Panel Bottom Edge h", 0.0, 100.0, 1.0, 0.5)
-    H_p = st.number_input("Panel Height Hp", 0.1, 50.0, 2.0, 0.1)
-    d   = st.number_input("Panel-to-Wall Distance d", 0.01, 20.0, 0.3, 0.01)
+    st.markdown('<div class="home-title">Vertical BIPV Irradiance Analysis</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="section-label">⑤ Albedo</div>', unsafe_allow_html=True)
-    rho_grd = st.number_input("Ground Albedo ρ_grd", 0.0, 1.0, 0.2, 0.01)
-    rho_w   = st.number_input("Wall Albedo ρ_w", 0.0, 1.0, 0.5, 0.01)
+    col1, col2 = st.columns(2, gap="medium")
+    with col1:
+        if st.button("Manual Irradiance Tester", key="btn_manual", use_container_width=True):
+            st.session_state.page = "manual"
+            st.rerun()
+    with col2:
+        if st.button("Taxila Irradiance Data", key="btn_taxila", use_container_width=True):
+            st.session_state.page = "taxila"
+            st.rerun()
 
-
-# ─── Compute at selected time ─────────────────────────────────────────────────
-sol, vf, extras, GF, GR = compute_irradiance(
-    sel_date, LCT, GHI, DHI, latitude, lambda_std, lambda_lcl,
-    H_b, h, H_p, d, rho_grd, rho_w)
-
-
-# ─── Main Layout ──────────────────────────────────────────────────────────────
-st.markdown('<div class="bipv-header">Vertical BIPV Irradiance Analysis</div>', unsafe_allow_html=True)
-st.markdown(
-    f'<div class="bipv-sub">{sel_date.strftime("%B %d, %Y")}  •  '
-    f'{hr:02d}:{mn:02d} LCT  •  Lat {latitude}°  |  λ_lcl {lambda_lcl}°</div>',
-    unsafe_allow_html=True)
-
-# ── Final Results Banner ──
-if sol['cos_z'] <= 0:
-    st.markdown(
-        '<div class="night-warn">🌙 Sun is below the horizon at this time — irradiance is zero.</div>',
-        unsafe_allow_html=True)
-else:
-    st.markdown(f"""
-    <div class="result-banner">
-      <div class="res-item">
-        <div class="res-label">Front Irradiance GF</div>
-        <div class="res-value">{GF:.1f}<span class="res-unit"> W/m²</span></div>
-      </div>
-      <div class="res-item" style="border-left:1px solid rgba(255,255,255,0.25);
-                                   border-right:1px solid rgba(255,255,255,0.25);
-                                   padding:0 32px;">
-        <div class="res-label">Rear Irradiance GR</div>
-        <div class="res-value">{GR:.1f}<span class="res-unit"> W/m²</span></div>
-      </div>
-      <div class="res-item">
-        <div class="res-label">Bifacial Total GF+GR</div>
-        <div class="res-value">{GF+GR:.1f}<span class="res-unit"> W/m²</span></div>
-      </div>
+    st.markdown("""
+    <div class="home-desc">
+        <p>
+            Analyze front and rear irradiance on vertically integrated bifacial 
+            photovoltaic panels mounted on building façades. This tool uses cavity 
+            view-factor models to compute GF (front), GR (rear) and GT (total) 
+            irradiance based on solar geometry, building dimensions, and surface 
+            albedo — enabling accurate energy-yield estimation for wall-mounted 
+            BIPV systems.
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
-# ── Two-column layout ──
-def make_table(rows):
-    body = "".join(
-        f"<tr><td>{n}</td><td>{v} {u}</td></tr>" for n, v, u in rows)
-    return (f'<table class="inter-table">'
-            f'<thead><tr><th>Parameter</th><th>Value</th></tr></thead>'
-            f'<tbody>{body}</tbody></table>')
+elif st.session_state.page == "manual":
+    import page_manual_irradiance
+    page_manual_irradiance.show()
 
-
-if vf and extras and sol['cos_z'] > 0:
-    row1_left, row1_right = st.columns(2, gap="large")
-    
-    with row1_left:
-        st.markdown('<div class="sec-title">Cavity View Factors</div>', unsafe_allow_html=True)
-        vf_sum = vf['XR_sky'] + vf['XR_grd'] + vf['XR_sh_w'] + vf['XR_ush_w']
-        st.markdown(make_table([
-            ("Top Gap L",        f"{vf['L']:.3f}",       "m"),
-            ("Shadow Δ",         f"{vf['Delta']:.3f}",   "m"),
-            ("XF_sky (front)",   f"{vf['XF_sky']:.4f}",  ""),
-            ("XF_grd (front)",   f"{vf['XF_grd']:.4f}",  ""),
-            ("XR_sky (rear)",    f"{vf['XR_sky']:.4f}",  ""),
-            ("XR_grd (rear)",    f"{vf['XR_grd']:.4f}",  ""),
-            ("XR_sh_w (rear)",   f"{vf['XR_sh_w']:.4f}", ""),
-            ("XR_ush_w (rear)",  f"{vf['XR_ush_w']:.4f}",""),
-            ("∑ Rear VF",        f"{vf_sum:.4f}",         "≈1"),
-        ]), unsafe_allow_html=True)
-
-    with row1_right:
-        st.markdown('<div class="sec-title">Solar Position</div>', unsafe_allow_html=True)
-        st.markdown(make_table([
-            ("Day Number n",        sol['n'],                   ""),
-            ("Declination δ",       f"{sol['delta']:.4f}",      "°"),
-            ("EoT",                 f"{sol['EoT']:.4f}",        "min"),
-            ("Local Solar Time",    f"{sol['LST']:.4f}",        "h"),
-            ("Hour Angle ω",        f"{sol['omega']:.4f}",      "°"),
-            ("Zenith Angle θz",     f"{sol['theta_z']:.4f}",    "°"),
-            ("Inclination αs",      f"{sol['alpha_s']:.4f}",    "°"),
-        ]), unsafe_allow_html=True)
-
-    row2_left, row2_right = st.columns(2, gap="large")
-
-    with row2_left:
-        st.markdown('<div class="sec-title">Angles & Beam Ratio</div>', unsafe_allow_html=True)
-        st.markdown(make_table([
-            ("AOI Front θF",        f"{extras['theta_F']:.4f}",      "°"),
-            ("cos θF",              f"{extras['cos_theta_F']:.4f}",  ""),
-            ("Beam Tilt Ratio RbF", f"{extras['RbF']:.4f}",          ""),
-            ("BHI (GHI–DHI)",       f"{extras['BHI']:.2f}",          "W/m²"),
-        ]), unsafe_allow_html=True)
-
-    with row2_right:
-        st.markdown('<div class="sec-title">Rear Irradiance Breakdown</div>', unsafe_allow_html=True)
-        st.markdown(make_table([
-            ("Sky diffuse leakage",   f"{extras['term_sky']:.2f}", "W/m²"),
-            ("Ground reflection",     f"{extras['term_grd']:.2f}", "W/m²"),
-            ("Shaded wall bounce",    f"{extras['term_sh']:.2f}",  "W/m²"),
-            ("Unshaded wall bounce",  f"{extras['term_ush']:.2f}", "W/m²"),
-        ]), unsafe_allow_html=True)
-
-
-# ─── Hourly Irradiance Profile Chart ──────────────────────────────────────────
-import pandas as st_pd
-
-@st.cache_data
-def load_irradiance_data():
-    return st_pd.read_csv("Taxila_Irradiance_Data.csv")
-
-df_irr = load_irradiance_data()
-
-# Filter for the selected month and day
-df_day = df_irr[(df_irr['Month'] == month_idx) & (df_irr['Day'] == int(sel_day))]
-
-if not df_day.empty:
-    st.markdown('<br><div class="sec-title" style="margin-top: 2rem;">Hourly Irradiance Profile</div>', unsafe_allow_html=True)
-    
-    hours = []
-    g_h_list = []
-    gd_h_list = []
-    gf_list = []
-    gr_list = []
-    gt_list = []
-    
-    for _, row in df_day.iterrows():
-        h_taxila = row['Hour Taxila']
-        g_h = row['G(h)']
-        gd_h = row['Gd(h)']
-        
-        # Calculate BIPV components for this hour using the CSV's G(h) and Gd(h)
-        # Note: h_taxila is an integer (0-23), we use it as LCT
-        curr_sol, curr_vf, curr_extras, curr_gf, curr_gr = compute_irradiance(
-            sel_date, h_taxila, g_h, gd_h, latitude, lambda_std, lambda_lcl,
-            H_b, h, H_p, d, rho_grd, rho_w
-        )
-        
-        hours.append(h_taxila)
-        g_h_list.append(g_h)
-        gd_h_list.append(gd_h)
-        gf_list.append(curr_gf)
-        gr_list.append(curr_gr)
-        gt_list.append(curr_gf + curr_gr)
-
-    import plotly.graph_objects as go
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(x=hours, y=g_h_list, mode='lines+markers', name='G(h)', line=dict(color='#9ca3af', width=2)))
-    fig.add_trace(go.Scatter(x=hours, y=gd_h_list, mode='lines+markers', name='Gd(h)', line=dict(color='#d1d5db', width=2, dash='dot')))
-    fig.add_trace(go.Scatter(x=hours, y=gf_list, mode='lines+markers', name='GF', line=dict(color='#0f766e', width=3)))
-    fig.add_trace(go.Scatter(x=hours, y=gr_list, mode='lines+markers', name='GR', line=dict(color='#7c3aed', width=3)))
-    fig.add_trace(go.Scatter(x=hours, y=gt_list, mode='lines+markers', name='GT (GF+GR)', line=dict(color='#ea580c', width=3)))
-    
-    selected_hour_val = hr + mn/60.0
-    fig.add_vline(x=selected_hour_val, line_width=2, line_dash="dash", line_color="#4338ca", annotation_text="Selected Time")
-    
-    fig.update_layout(
-        xaxis_title='Hour (Taxila Time)',
-        yaxis_title='Irradiance (W/m²)',
-        margin=dict(l=40, r=40, t=40, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='#f1f5f9', tickmode='linear', tick0=0, dtick=1),
-        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='#f1f5f9')
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
+elif st.session_state.page == "taxila":
+    import page_taxila_irradiance
+    page_taxila_irradiance.show()
