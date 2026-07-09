@@ -15,8 +15,8 @@ date_str = "2025-12-12"         # Date
 time_str = "12:00"              # Time (LCT)
 GHI = 800                     # Global Horizontal Irradiance (W/m2)
 DHI = 100                     # Diffuse Horizontal Irradiance (W/m2)
-T_a_C = 30.0                    # Ambient Air Temp (Celsius)
-u = 3.5                         # Wind speed (m/s)
+T_a_C = 25.0                    # Ambient Air Temp (Celsius)
+u = 2.0                         # Wind speed (m/s)
 
 # --- B. OPTICAL & INSTALLATION INPUTS ---
 latitude = 33.7                # Latitude (φ, degrees)
@@ -47,7 +47,7 @@ stc = {
 }
 
 # --- D. THERMAL & MATERIAL INPUTS ---
-A = 1.769                       # Panel Area (m2)
+A = 2.0                         # Panel Area (m2)
 T_room_C = 22.0                 # Indoor room temp (Celsius)
 alpha_g = 0.05                  # Absorptance of glass
 tau_g = 0.90                    # Transmittance of front glass
@@ -64,9 +64,9 @@ mat = {
 gap = {
     'd': d,                     # Linked to Optical input
     'H_p': H_p,                 # Linked to Optical input
-    'nu': 1.69e-5,              # Kinematic viscosity of air (m2/s)
-    'alpha_air': 2.4e-5,        # Thermal diffusivity of air (m2/s)
-    'k_air': 0.027              # Thermal conductivity of air (W/mK)
+    'nu': 1.56e-5,              # Kinematic viscosity of air (m2/s)
+    'alpha_air': 2.21e-5,        # Thermal diffusivity of air (m2/s)
+    'k_air': 0.0261              # Thermal conductivity of air (W/mK)
 }
 
 # --- E. FUNDAMENTAL CONSTANTS ---
