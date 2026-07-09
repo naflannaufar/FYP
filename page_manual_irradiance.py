@@ -2,6 +2,9 @@ import math
 import streamlit as st
 from datetime import date
 import calendar
+import numpy as np
+from scipy.optimize import fsolve, minimize_scalar
+from scipy.integrate import solve_ivp
 
 def show():
     # ─── Page-level CSS Overrides ──────────────────────────────────────────────
@@ -10,6 +13,21 @@ def show():
       .block-container {
         padding-top: 0rem !important;
         padding-bottom: 2rem !important;
+      }
+      /* Sidebar active/inactive button overrides */
+      section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
+        background: #eef2ff !important;
+        color: #0f766e !important;
+        border: 1px solid #c7d2fe !important;
+        box-shadow: none !important;
+        font-weight: 500 !important;
+      }
+      section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
+        background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: 0 4px 10px rgba(15,118,110,0.2) !important;
+        font-weight: 700 !important;
       }
     </style>
     """, unsafe_allow_html=True)
@@ -102,6 +120,75 @@ def show():
             st.session_state.page = "home"
             st.rerun()
 
+        # Initialize session state defaults if not present
+        if "active_tab" not in st.session_state:
+            st.session_state.active_tab = "Optical"
+
+        # Version key: bump this to force-reset defaults when they change
+        _DEFAULTS_VERSION = 2
+        defaults = {
+            # Optical (matching couple.py exactly)
+            'sel_month': 'December',
+            'sel_day': 12,
+            'hr': 12,
+            'mn': 0,
+            'GHI': 800.0,                 # couple.py: GHI = 800
+            'DHI': 100.0,                 # couple.py: DHI = 100
+            'latitude': 33.7,             # couple.py: latitude = 33.7
+            'lambda_std': 75.0,           # couple.py: lambda_std = 75.0
+            'lambda_lcl': 72.84,          # couple.py: lambda_lcl = 72.84
+            'H_b': 10.0,                  # couple.py: H_b = 10.0
+            'h': 5.0,                     # couple.py: h = 5
+            'H_p': 2.0,                   # couple.py: H_p = 2.0
+            'd_val': 0.2,                 # couple.py: d = 0.2
+            'rho_grd': 0.3,              # couple.py: rho_grd = 0.3
+            'rho_w': 0.3,                # couple.py: rho_w = 0.3
+            
+            # Thermal general (matching couple.py exactly)
+            'A': 1.769,                   # couple.py: A = 1.769
+            'T_room_C': 22.0,            # couple.py: T_room_C = 22.0
+            'alpha_g': 0.05,             # couple.py: alpha_g = 0.05
+            'tau_g': 0.90,               # couple.py: tau_g = 0.90
+            'tau_rg': 0.90,              # couple.py: tau_rg = 0.90
+            'eps_g': 0.85,               # couple.py: eps_g = 0.85
+            'T_a_C': 30.0,              # couple.py: T_a_C = 30.0
+            'u': 3.5,                    # couple.py: u = 3.5
+            
+            # Thermal materials (matching couple.py mat dict exactly)
+            'mat_g_Cp': 800.0, 'mat_g_rho': 2500.0, 'mat_g_delta': 0.0032, 'mat_g_lam': 1.8,
+            'mat_eva_Cp': 2090.0, 'mat_eva_rho': 960.0, 'mat_eva_delta': 0.0005, 'mat_eva_lam': 0.31,
+            'mat_pv_Cp': 677.0, 'mat_pv_rho': 2330.0, 'mat_pv_delta': 0.0002, 'mat_pv_lam': 148.0,
+            'mat_wall_Cp': 880.0, 'mat_wall_rho': 2400.0, 'mat_wall_delta': 0.2000, 'mat_wall_lam': 1.5,
+            
+            # Thermal gap (matching couple.py gap dict exactly)
+            'gap_nu': 1.69e-5,           # couple.py: nu = 1.69e-5
+            'gap_alpha_air': 2.4e-5,     # couple.py: alpha_air = 2.4e-5
+            'gap_k_air': 0.027,          # couple.py: k_air = 0.027
+            
+            # Electrical STC (matching couple.py stc dict exactly)
+            'Voc_F': 44.5,              # couple.py: Voc_F = 44.5
+            'Isc_F': 9.96,              # couple.py: Isc_F = 9.96
+            'Vmp_F': 37.9,              # couple.py: Vmp_F = 37.9
+            'Imp_F': 9.38,              # couple.py: Imp_F = 9.38
+            'Pmax_F': 355.0,            # couple.py: Pmax_F = 355.0
+            'Isc_R': 8.53,              # couple.py: Isc_R = 8.53
+            'Pmax_R': 302.0,            # couple.py: Pmax_R = 302.0
+            'alpha_pct': 0.048,          # couple.py: alpha_pct = 0.048
+            'beta_pct': -0.30,           # couple.py: beta_pct = -0.30
+            'phi': 0.75,                 # couple.py: phi = 0.75
+            'Ns': 72                     # couple.py: Ns = 72
+        }
+
+        # Force-reset all defaults if version changed (clears stale session state)
+        if st.session_state.get('_defaults_version') != _DEFAULTS_VERSION:
+            for k, v in defaults.items():
+                st.session_state[k] = v
+            st.session_state['_defaults_version'] = _DEFAULTS_VERSION
+        else:
+            for k, v in defaults.items():
+                if k not in st.session_state:
+                    st.session_state[k] = v
+
         st.markdown("""
         <div style="background:linear-gradient(135deg,#ecfeff,#f0fdfa);border:1.5px solid #99f6e4;
                     border-radius:8px;padding:10px 14px;margin:10px 0;">
@@ -114,47 +201,347 @@ def show():
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown('<div class="section-label">① Date & Time</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">🔧 Parameter Select</div>', unsafe_allow_html=True)
+        col_opt, col_ther, col_elec = st.columns(3)
+        with col_opt:
+            if st.button("Optical", key="param_opt", type="primary" if st.session_state.active_tab == "Optical" else "secondary", use_container_width=True):
+                st.session_state.active_tab = "Optical"
+                st.rerun()
+        with col_ther:
+            if st.button("Thermal", key="param_ther", type="primary" if st.session_state.active_tab == "Thermal" else "secondary", use_container_width=True):
+                st.session_state.active_tab = "Thermal"
+                st.rerun()
+        with col_elec:
+            if st.button("Electrical", key="param_elec", type="primary" if st.session_state.active_tab == "Electrical" else "secondary", use_container_width=True):
+                st.session_state.active_tab = "Electrical"
+                st.rerun()
+
+        # Render active tab's parameters
         month_names = list(calendar.month_name)[1:]
-        col_m, col_d = st.columns(2)
-        with col_m:
-            sel_month = st.selectbox("Month", month_names, index=11)
-        month_idx = month_names.index(sel_month) + 1
-        max_day = calendar.monthrange(2025, month_idx)[1]
-        with col_d:
-            sel_day = st.number_input("Day", min_value=1, max_value=max_day, value=min(21, max_day))
-        sel_date = date(2025, month_idx, int(sel_day))
+        if st.session_state.active_tab == "Optical":
+            st.markdown('<div class="section-label">① Date & Time</div>', unsafe_allow_html=True)
+            col_m, col_d = st.columns(2)
+            with col_m:
+                st.selectbox("Month", month_names, key='sel_month')
+            month_idx = month_names.index(st.session_state.sel_month) + 1
+            max_day = calendar.monthrange(2025, month_idx)[1]
+            if st.session_state.sel_day > max_day:
+                st.session_state.sel_day = max_day
+            with col_d:
+                st.number_input("Day", min_value=1, max_value=max_day, key='sel_day')
+            
+            col_h, col_min = st.columns(2)
+            with col_h:
+                st.number_input("Hour", 0, 23, key='hr')
+            with col_min:
+                st.number_input("Min", 0, 59, key='mn', step=15)
+            
+            st.markdown('<div class="section-label">② Irradiance (W/m²)</div>', unsafe_allow_html=True)
+            st.number_input("GHI – Global Horizontal", 0.0, 1500.0, key='GHI')
+            st.number_input("DHI – Diffuse Horizontal", 0.0, 800.0, key='DHI')
+            
+            st.markdown('<div class="section-label">③ Location</div>', unsafe_allow_html=True)
+            st.number_input("Latitude φ (°)", -90.0, 90.0, key='latitude')
+            st.number_input("Standard Longitude λstd (°)", -180.0, 180.0, key='lambda_std')
+            st.number_input("Local Longitude λlcl (°)", -180.0, 180.0, key='lambda_lcl')
+            
+            st.markdown('<div class="section-label">④ Building Geometry (m)</div>', unsafe_allow_html=True)
+            st.number_input("Building Height Hb", 0.5, 200.0, key='H_b')
+            st.number_input("Panel Bottom Edge h", 0.0, 100.0, key='h')
+            st.number_input("Panel Height Hp", 0.1, 50.0, key='H_p')
+            st.number_input("Panel-to-Wall Distance d", 0.01, 20.0, key='d_val')
+            
+            st.markdown('<div class="section-label">⑤ Albedo</div>', unsafe_allow_html=True)
+            st.number_input("Ground Albedo ρ_grd", 0.0, 1.0, key='rho_grd')
+            st.number_input("Wall Albedo ρ_w", 0.0, 1.0, key='rho_w')
 
-        col_h, col_min = st.columns(2)
-        with col_h:
-            hr = st.number_input("Hour", 0, 23, 12)
-        with col_min:
-            mn = st.number_input("Min", 0, 59, 0, step=15)
-        LCT = hr + mn / 60.0
+        elif st.session_state.active_tab == "Thermal":
+            st.markdown('<div class="section-label">① Environment & Area</div>', unsafe_allow_html=True)
+            st.number_input("Panel Area A (m²)", 0.1, 100.0, key='A')
+            st.number_input("Indoor Room Temp (°C)", -50.0, 100.0, key='T_room_C')
+            st.number_input("Ambient Air Temp (°C)", -50.0, 100.0, key='T_a_C')
+            st.number_input("Wind Speed u (m/s)", 0.0, 100.0, key='u')
+            
+            st.markdown('<div class="section-label">② Glass Properties</div>', unsafe_allow_html=True)
+            st.number_input("Absorptance of glass α_g", 0.0, 1.0, key='alpha_g')
+            st.number_input("Transmittance of front glass τ_g", 0.0, 1.0, key='tau_g')
+            st.number_input("Transmittance of rear glass τ_rg", 0.0, 1.0, key='tau_rg')
+            st.number_input("Emissivity of glass ε_g", 0.0, 1.0, key='eps_g')
+            
+            st.markdown('<div class="section-label">③ Material Layers</div>', unsafe_allow_html=True)
+            with st.expander("Glass layer properties"):
+                st.number_input("Cp (J/kg·K)", value=800.0, key='mat_g_Cp')
+                st.number_input("rho (kg/m³)", value=2500.0, key='mat_g_rho')
+                st.number_input("delta (m)", value=0.0032, key='mat_g_delta', format="%.4f")
+                st.number_input("lambda (W/m·K)", value=1.8, key='mat_g_lam')
+                
+            with st.expander("EVA layer properties"):
+                st.number_input("Cp (J/kg·K)", value=2090.0, key='mat_eva_Cp')
+                st.number_input("rho (kg/m³)", value=960.0, key='mat_eva_rho')
+                st.number_input("delta (m)", value=0.0005, key='mat_eva_delta', format="%.5f")
+                st.number_input("lambda (W/m·K)", value=0.31, key='mat_eva_lam')
+                
+            with st.expander("PV Silicon properties"):
+                st.number_input("Cp (J/kg·K)", value=677.0, key='mat_pv_Cp')
+                st.number_input("rho (kg/m³)", value=2330.0, key='mat_pv_rho')
+                st.number_input("delta (m)", value=0.0002, key='mat_pv_delta', format="%.5f")
+                st.number_input("lambda (W/m·K)", value=148.0, key='mat_pv_lam')
+                
+            with st.expander("Concrete Wall properties"):
+                st.number_input("Cp (J/kg·K)", value=880.0, key='mat_wall_Cp')
+                st.number_input("rho (kg/m³)", value=2400.0, key='mat_wall_rho')
+                st.number_input("delta (m)", value=0.2000, key='mat_wall_delta', format="%.4f")
+                st.number_input("lambda (W/m·K)", value=1.5, key='mat_wall_lam')
 
-        st.markdown('<div class="section-label">② Irradiance (W/m²)</div>', unsafe_allow_html=True)
-        GHI = st.number_input("GHI – Global Horizontal", 0.0, 1500.0, 800.0, 10.0)
-        DHI = st.number_input("DHI – Diffuse Horizontal", 0.0, 800.0, 150.0, 10.0)
+            st.markdown('<div class="section-label">④ Air Gap Constants</div>', unsafe_allow_html=True)
+            st.number_input("Kinematic viscosity nu (m²/s)", value=1.69e-5, format="%.2e", key='gap_nu')
+            st.number_input("Thermal diffusivity alpha_air (m²/s)", value=2.4e-5, format="%.2e", key='gap_alpha_air')
+            st.number_input("Thermal conductivity k_air (W/m·K)", value=0.027, format="%.3f", key='gap_k_air')
 
-        st.markdown('<div class="section-label">③ Location</div>', unsafe_allow_html=True)
-        latitude   = st.number_input("Latitude φ (°)", -90.0, 90.0, 33.7, 0.5)
-        lambda_std = st.number_input("Standard Longitude λstd (°)", -180.0, 180.0, 75.0, 1.0)
-        lambda_lcl = st.number_input("Local Longitude λlcl (°)", -180.0, 180.0, 73.1, 0.1)
+        elif st.session_state.active_tab == "Electrical":
+            st.markdown('<div class="section-label">① Front Panel Datasheet</div>', unsafe_allow_html=True)
+            st.number_input("Voc_F: Open-Circuit Voltage (V)", 0.0, 200.0, key='Voc_F')
+            st.number_input("Isc_F: Short-Circuit Current (A)", 0.0, 50.0, key='Isc_F')
+            st.number_input("Vmp_F: Max Power Voltage (V)", 0.0, 200.0, key='Vmp_F')
+            st.number_input("Imp_F: Max Power Current (A)", 0.0, 50.0, key='Imp_F')
+            st.number_input("Pmax_F: Max Power (W)", 0.0, 1000.0, key='Pmax_F')
+            
+            st.markdown('<div class="section-label">② Rear Panel Datasheet</div>', unsafe_allow_html=True)
+            st.number_input("Isc_R: Short-Circuit Current (A)", 0.0, 50.0, key='Isc_R')
+            st.number_input("Pmax_R: Max Power (W)", 0.0, 1000.0, key='Pmax_R')
+            
+            st.markdown('<div class="section-label">③ Coefficients & Tech</div>', unsafe_allow_html=True)
+            st.number_input("alpha_pct: Temp Coeff of Isc (%/°C)", -5.0, 5.0, key='alpha_pct', format="%.3f")
+            st.number_input("beta_pct: Temp Coeff of Voc (%/°C)", -5.0, 5.0, key='beta_pct', format="%.2f")
+            st.number_input("phi: Bifaciality Factor", 0.0, 1.5, key='phi', format="%.2f")
+            st.number_input("Ns: Cells in Series", 1, 500, key='Ns')
 
-        st.markdown('<div class="section-label">④ Building Geometry (m)</div>', unsafe_allow_html=True)
-        H_b = st.number_input("Building Height Hb", 0.5, 200.0, 10.0, 0.5)
-        h   = st.number_input("Panel Bottom Edge h", 0.0, 100.0, 1.0, 0.5)
-        H_p = st.number_input("Panel Height Hp", 0.1, 50.0, 2.0, 0.1)
-        d_val = st.number_input("Panel-to-Wall Distance d", 0.01, 20.0, 0.3, 0.01)
+    # ─── Load state variables for calculations ───────────────────────────────
+    sel_month = st.session_state.sel_month
+    sel_day = st.session_state.sel_day
+    hr = st.session_state.hr
+    mn = st.session_state.mn
+    GHI = st.session_state.GHI
+    DHI = st.session_state.DHI
+    latitude = st.session_state.latitude
+    lambda_std = st.session_state.lambda_std
+    lambda_lcl = st.session_state.lambda_lcl
+    H_b = st.session_state.H_b
+    h = st.session_state.h
+    H_p = st.session_state.H_p
+    d_val = st.session_state.d_val
+    rho_grd = st.session_state.rho_grd
+    rho_w = st.session_state.rho_w
 
-        st.markdown('<div class="section-label">⑤ Albedo</div>', unsafe_allow_html=True)
-        rho_grd = st.number_input("Ground Albedo ρ_grd", 0.0, 1.0, 0.2, 0.01)
-        rho_w   = st.number_input("Wall Albedo ρ_w", 0.0, 1.0, 0.5, 0.01)
+    A = st.session_state.A
+    T_room_C = st.session_state.T_room_C
+    alpha_g = st.session_state.alpha_g
+    tau_g = st.session_state.tau_g
+    tau_rg = st.session_state.tau_rg
+    eps_g = st.session_state.eps_g
+    T_a_C = st.session_state.T_a_C
+    u = st.session_state.u
 
-    # ─── Compute ───────────────────────────────────────────────────────────────
+    mat = {
+        'g':    {'Cp': st.session_state.mat_g_Cp,  'rho': st.session_state.mat_g_rho,  'delta': st.session_state.mat_g_delta,  'lam': st.session_state.mat_g_lam},
+        'eva':  {'Cp': st.session_state.mat_eva_Cp, 'rho': st.session_state.mat_eva_rho, 'delta': st.session_state.mat_eva_delta, 'lam': st.session_state.mat_eva_lam},
+        'pv':   {'Cp': st.session_state.mat_pv_Cp,  'rho': st.session_state.mat_pv_rho,  'delta': st.session_state.mat_pv_delta,  'lam': st.session_state.mat_pv_lam},
+        'wall': {'Cp': st.session_state.mat_wall_Cp, 'rho': st.session_state.mat_wall_rho, 'delta': st.session_state.mat_wall_delta, 'lam': st.session_state.mat_wall_lam}
+    }
+
+    gap = {
+        'd': d_val,
+        'H_p': H_p,
+        'nu': st.session_state.gap_nu,
+        'alpha_air': st.session_state.gap_alpha_air,
+        'k_air': st.session_state.gap_k_air
+    }
+
+    stc = {
+        'Voc_F': st.session_state.Voc_F,
+        'Isc_F': st.session_state.Isc_F,
+        'Vmp_F': st.session_state.Vmp_F,
+        'Imp_F': st.session_state.Imp_F,
+        'Pmax_F': st.session_state.Pmax_F,
+        'Isc_R': st.session_state.Isc_R,
+        'Pmax_R': st.session_state.Pmax_R,
+        'alpha_pct': st.session_state.alpha_pct,
+        'beta_pct': st.session_state.beta_pct,
+        'phi': st.session_state.phi,
+        'Ns': st.session_state.Ns
+    }
+
+    month_idx = month_names.index(sel_month) + 1
+    sel_date = date(2025, month_idx, int(sel_day))
+    LCT = hr + mn / 60.0
+
+    # ─── Compute Optical model ──────────────────────────────────────────────────
     sol, vf, extras, GF, GR = compute_irradiance(
         sel_date, LCT, GHI, DHI, latitude, lambda_std, lambda_lcl,
         H_b, h, H_p, d_val, rho_grd, rho_w)
+
+    # ─── Coupled Physics Solver ─────────────────────────────────────────────────
+    q = 1.602e-19                   # Electron charge (C)
+    K = 1.381e-23                   # Boltzmann constant (J/K)
+    E_g = 1.7936e-19                # Band gap energy of Silicon (J)
+    T_ref = 298.15                  # STC Reference Temp (25 C in Kelvin)
+    G_ref = 1000.0                  # STC Reference Irradiance (W/m2)
+    sigma = 5.67e-8                 # Stefan-Boltzmann constant (W/m2K4)
+
+    alpha_abs = (stc['alpha_pct'] / 100.0) * stc['Isc_F']
+    beta_abs  = (stc['beta_pct']  / 100.0) * stc['Voc_F']
+    T_a = T_a_C + 273.15
+    T_room = T_room_C + 273.15
+
+    # Precalculate baseline STC
+    try:
+        I_ph_ref = stc['Isc_F']
+        V_t_ref = (beta_abs * T_ref - stc['Voc_F']) / (stc['Ns'] * T_ref * (alpha_abs / I_ph_ref) - 3 * stc['Ns'] - (E_g * stc['Ns']) / (K * T_ref))
+        I_0_ref = stc['Isc_F'] * np.exp(-stc['Voc_F'] / (stc['Ns'] * V_t_ref))
+
+        def solve_Rs_ref_eq(Rs_guess):
+            num_Rp = (stc['Vmp_F'] - stc['Imp_F'] * Rs_guess) * (stc['Vmp_F'] - stc['Ns'] * V_t_ref)
+            den_Rp = (stc['Vmp_F'] - stc['Imp_F'] * Rs_guess) * (stc['Isc_F'] - stc['Imp_F']) - stc['Ns'] * V_t_ref * stc['Imp_F']
+            Rp_substituted = num_Rp / den_Rp
+            I_calc = I_ph_ref - I_0_ref * (np.exp((stc['Vmp_F'] + stc['Imp_F'] * Rs_guess) / (stc['Ns'] * V_t_ref)) - 1) - ((stc['Vmp_F'] + stc['Imp_F'] * Rs_guess) / Rp_substituted)
+            return I_calc - stc['Imp_F']
+
+        R_s_ref = fsolve(solve_Rs_ref_eq, x0=0.1)[0]
+        R_p_ref = ((stc['Vmp_F'] - stc['Imp_F'] * R_s_ref) * (stc['Vmp_F'] - stc['Ns'] * V_t_ref)) / ((stc['Vmp_F'] - stc['Imp_F'] * R_s_ref) * (stc['Isc_F'] - stc['Imp_F']) - stc['Ns'] * V_t_ref * stc['Imp_F'])
+    except Exception as ex:
+        I_ph_ref = stc['Isc_F']
+        V_t_ref = 0.025
+        I_0_ref = 1e-9
+        R_s_ref = 0.1
+        R_p_ref = 100.0
+
+    def run_electrical_model(G_F, G_R, T_PV_K):
+        G_E = G_F + G_R * stc['phi']
+        if G_E <= 0.01:
+            return {
+                'P_PV': 0.0, 'G_E': G_E, 'I_ph': 0.0, 'I_0': 0.0, 'R_s': R_s_ref, 'R_p': 1e6, 'V_t': 0.0,
+                'V_mp': 0.0, 'I_mp': 0.0
+            }
+
+        I_ph = (G_E / G_ref) * (I_ph_ref + alpha_abs * (T_PV_K - T_ref))
+        I_0 = I_0_ref * ((T_PV_K / T_ref)**3) * np.exp((E_g / K) * ((1/T_ref) - (1/T_PV_K)))
+        R_p = (G_ref / G_E) * R_p_ref
+        V_t = (T_PV_K / T_ref) * V_t_ref
+
+        def current_eq_23(I, V):
+            return I_ph - I_0 * (np.exp((V + I * R_s_ref) / (stc['Ns'] * V_t)) - 1) - ((V + I * R_s_ref) / R_p) - I
+
+        def find_mpp(V):
+            try:
+                I_solved = fsolve(current_eq_23, x0=I_ph, args=(V,))[0]
+            except:
+                I_solved = 0.0
+            return -(I_solved * V)
+
+        estimated_Voc = stc['Ns'] * V_t * np.log((I_ph / I_0) + 1)
+        if not np.isfinite(estimated_Voc) or estimated_Voc <= 0:
+            return {
+                'P_PV': 0.0, 'G_E': G_E, 'I_ph': I_ph, 'I_0': I_0, 'R_s': R_s_ref, 'R_p': R_p, 'V_t': V_t,
+                'V_mp': 0.0, 'I_mp': 0.0
+            }
+        result = minimize_scalar(find_mpp, bounds=(0, estimated_Voc), method='bounded')
+        P_PV = -result.fun
+        V_mp = result.x
+        try:
+            I_mp = fsolve(current_eq_23, x0=I_ph, args=(V_mp,))[0]
+        except:
+            I_mp = 0.0
+
+        return {
+            'P_PV': P_PV, 'G_E': G_E, 'I_ph': I_ph, 'I_0': I_0, 'R_s': R_s_ref, 'R_p': R_p, 'V_t': V_t,
+            'V_mp': V_mp, 'I_mp': I_mp
+        }
+
+    # Thermal masses
+    M_g = mat['g']['Cp'] * mat['g']['delta'] * mat['g']['rho'] * A
+    M_eva = mat['eva']['Cp'] * mat['eva']['delta'] * mat['eva']['rho'] * A
+    M_pv = mat['pv']['Cp'] * mat['pv']['delta'] * mat['pv']['rho'] * A
+    M_wall = mat['wall']['Cp'] * mat['wall']['delta'] * mat['wall']['rho'] * A
+
+    def R_cond(mat1, mat2):
+        return (mat[mat1]['delta'] / (2 * mat[mat1]['lam'] * A)) + (mat[mat2]['delta'] / (2 * mat[mat2]['lam'] * A))
+
+    R_EVA1_g = R_cond('eva', 'g')
+    R_PV_EVA1 = R_cond('pv', 'eva')
+    R_PV_EVA2 = R_cond('pv', 'eva')
+    R_EVA2_rg = R_cond('eva', 'g')
+    R_cond_wall = mat['wall']['delta'] / (mat['wall']['lam'] * A)
+
+    def calculate_h_gap(T_rg_K, T_a_K):
+        delta_T = T_rg_K - T_a_K
+        if delta_T <= 0.01: return gap['k_air'] / gap['d']
+        Tf = T_a_K + 0.25 * delta_T
+        Ra_b = ((9.81 * (1.0 / Tf) * delta_T * (gap['d'] ** 3)) / (gap['nu'] * gap['alpha_air'])) * (gap['d'] / gap['H_p'])
+        Nu_b = ((144.0 / (Ra_b ** 2)) + (2.873 / (Ra_b ** 0.5))) ** (-0.5)
+        return (Nu_b * gap['k_air']) / gap['d']
+
+    def run_thermal_model(G_F, G_R, P_PV, T_initial_array):
+        def bipv_derivatives(t, T_array):
+            T_g, T_eva1, T_pv, T_eva2, T_rg, T_wall = T_array
+            T_gap = (T_rg + T_wall) / 2.0
+            T_sky = 0.0552 * (T_a ** 1.5)
+
+            h_rad_g = eps_g * sigma * (T_sky**2 + T_g**2) * (T_sky + T_g)
+            h_conv_g = 2.8 + 3.0 * u
+            h_rad_rg = eps_g * sigma * (T_wall**2 + T_rg**2) * (T_wall + T_rg)
+            h_gap_conv = calculate_h_gap(T_rg, T_a)
+
+            R_rad_g, R_conv_g = 1.0 / (h_rad_g * A), 1.0 / (h_conv_g * A)
+            R_rad_rg, R_conv_rg = 1.0 / (h_rad_rg * A), 1.0 / (h_gap_conv * A)
+
+            dTg_dt = (alpha_g * G_F * A + (T_eva1 - T_g)/R_EVA1_g - (T_g - T_a)/R_conv_g - (T_g - T_sky)/R_rad_g) / M_g
+            dTeva1_dt = ((T_pv - T_eva1)/R_PV_EVA1 - (T_eva1 - T_g)/R_EVA1_g) / M_eva
+            dTpv_dt = (((tau_g * (G_F + G_R) * A) - P_PV) - (T_pv - T_eva1)/R_PV_EVA1 - (T_pv - T_eva2)/R_PV_EVA2 )/ M_pv
+            dTeva2_dt = ((T_pv - T_eva2)/R_PV_EVA2 - (T_eva2 - T_rg)/R_EVA2_rg) / M_eva
+            dTrg_dt = (alpha_g * G_R * A + (T_eva2 - T_rg)/R_EVA2_rg - (T_rg - T_gap)/R_conv_rg - (T_rg - T_wall)/R_rad_rg) / M_g
+            dTwall_dt = ((T_rg - T_wall)/R_rad_rg + h_gap_conv * A * (T_gap - T_wall) - (T_wall - T_room)/R_cond_wall) / M_wall
+
+            return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
+
+        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau', rtol=1e-4, atol=1e-4)
+        return solution.y[:, -1]
+
+    # Coupling Iteration Loop
+    T_old_array = [T_a, T_a, T_a, T_a, T_a, T_a]
+    T_new_array = list(T_old_array)  # Initialize so it's always defined
+    T_PV_old = T_old_array[2]
+    error = 100.0
+    iteration = 1
+    max_iterations = 50
+    converged = False
+
+    with st.spinner("Calculating coupled system convergence..."):
+        while error > 1e-5 and iteration <= max_iterations:
+            elec_out = run_electrical_model(GF, GR, T_PV_old)
+            P_PV_calculated = elec_out['P_PV']
+            try:
+                T_new_array = run_thermal_model(GF, GR, P_PV_calculated, T_old_array)
+                T_PV_new = T_new_array[2]
+                error = abs(T_PV_new - T_PV_old)
+                T_PV_old = T_PV_new
+                T_old_array = list(T_new_array)  # Feed converged temps back
+            except Exception as ivp_ex:
+                break
+            iteration += 1
+        if error <= 1e-5:
+            converged = True
+
+    elec_final = run_electrical_model(GF, GR, T_PV_old)
+    final_temps = T_new_array
+
+    # Final Temperatures in Celsius
+    T_wall_c = final_temps[5] - 273.15
+    T_gap_c = ((final_temps[4] + final_temps[5]) / 2.0) - 273.15
+    T_g_c = final_temps[0] - 273.15
+    T_eva1_c = final_temps[1] - 273.15
+    T_pv_c = final_temps[2] - 273.15
+    T_eva2_c = final_temps[3] - 273.15
+    T_rg_c = final_temps[4] - 273.15
 
     # ─── Main Layout ──────────────────────────────────────────────────────────
     st.markdown('<div class="bipv-header" style="color: #0f766e !important;">Manual Irradiance Tester</div>', unsafe_allow_html=True)
@@ -165,27 +552,27 @@ def show():
 
     if sol['cos_z'] <= 0:
         st.markdown(
-            '<div class="night-warn">🌙 Sun is below the horizon at this time — irradiance is zero.</div>',
+            '<div class="night-warn">🌙 Sun is below the horizon at this time — solar irradiance is zero. Showing thermal model results.</div>',
             unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="result-banner">
-          <div class="res-item">
-            <div class="res-label">Front Irradiance GF</div>
-            <div class="res-value">{GF:.1f}<span class="res-unit"> W/m²</span></div>
-          </div>
-          <div class="res-item" style="border-left:1px solid rgba(255,255,255,0.25);
-                                       border-right:1px solid rgba(255,255,255,0.25);
-                                       padding:0 32px;">
-            <div class="res-label">Rear Irradiance GR</div>
-            <div class="res-value">{GR:.1f}<span class="res-unit"> W/m²</span></div>
-          </div>
-          <div class="res-item">
-            <div class="res-label">Bifacial Total GF+GR</div>
-            <div class="res-value">{GF+GR:.1f}<span class="res-unit"> W/m²</span></div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="result-banner">
+      <div class="res-item">
+        <div class="res-label">Front Irradiance GF</div>
+        <div class="res-value">{GF:.1f}<span class="res-unit"> W/m²</span></div>
+      </div>
+      <div class="res-item" style="border-left:1px solid rgba(255,255,255,0.25);
+                                   border-right:1px solid rgba(255,255,255,0.25);
+                                   padding:0 32px;">
+        <div class="res-label">Rear Irradiance GR</div>
+        <div class="res-value">{GR:.1f}<span class="res-unit"> W/m²</span></div>
+      </div>
+      <div class="res-item">
+        <div class="res-label">Bifacial Total GF+GR</div>
+        <div class="res-value">{GF+GR:.1f}<span class="res-unit"> W/m²</span></div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     def make_table(rows):
         body = "".join(
@@ -194,50 +581,50 @@ def show():
                 f'<thead><tr><th>Parameter</th><th>Value</th></tr></thead>'
                 f'<tbody>{body}</tbody></table>')
 
-    if vf and extras and sol['cos_z'] > 0:
-        row1_left, row1_right = st.columns(2, gap="large")
-        with row1_left:
-            st.markdown('<div class="sec-title">Solar Position</div>', unsafe_allow_html=True)
-            st.markdown(make_table([
-                ("Day Number n",        sol['n'],                   ""),
-                ("Declination δ",       f"{sol['delta']:.4f}",      "°"),
-                ("EoT",                 f"{sol['EoT']:.4f}",        "min"),
-                ("Local Solar Time",    f"{sol['LST']:.4f}",        "h"),
-                ("Hour Angle ω",        f"{sol['omega']:.4f}",      "°"),
-                ("Zenith Angle θz",     f"{sol['theta_z']:.4f}",    "°"),
-                ("Inclination αs",      f"{sol['alpha_s']:.4f}",    "°"),
-            ]), unsafe_allow_html=True)
+    if converged:
+        st.info(f"✅ Coupled physics system converged in {iteration - 1} iterations.")
+    else:
+        st.warning(f"⚠️ Physics loop did not converge within {max_iterations} iterations. (Residual: {error:.2e} K)")
 
-        with row1_right:
-            st.markdown('<div class="sec-title">View Factors</div>', unsafe_allow_html=True)
-            vf_sum = vf['XR_sky'] + vf['XR_grd'] + vf['XR_sh_w'] + vf['XR_ush_w']
-            st.markdown(make_table([
-                ("L (Panel top edge – Building top)",        f"{vf['L']:.3f}",       "m"),
-                ("∆=d tan⁡α",         f"{vf['Delta']:.3f}",   "m"),
-                ("XF_sky (front)",   f"{vf['XF_sky']:.6f}",  ""),
-                ("XF_grd (front)",   f"{vf['XF_grd']:.6f}",  ""),
-                ("XR_sky (rear)",    f"{vf['XR_sky']:.6f}",  ""),
-                ("XR_grd (rear)",    f"{vf['XR_grd']:.6f}",  ""),
-                ("XR_sh_w (rear)",   f"{vf['XR_sh_w']:.6f}", ""),
-                ("XR_ush_w (rear)",  f"{vf['XR_ush_w']:.6f}",""),
-                ("∑ Rear VF",        f"{vf_sum:.4f}",         "≈1"),
-            ]), unsafe_allow_html=True)
+    # Two columns for Electrical and Thermal Models
+    col_left, col_right = st.columns(2, gap="large")
 
-        row2_left, row2_right = st.columns(2, gap="large")
-        with row2_left:
-            st.markdown('<div class="sec-title">Angles & Beam Ratio</div>', unsafe_allow_html=True)
-            st.markdown(make_table([
-                ("AOI Front θF",        f"{extras['theta_F']:.4f}",      "°"),
-                ("cos θF",              f"{extras['cos_theta_F']:.4f}",  ""),
-                ("Beam Tilt Ratio RbF", f"{extras['RbF']:.4f}",          ""),
-                ("BHI (GHI–DHI)",       f"{extras['BHI']:.2f}",          "W/m²"),
-            ]), unsafe_allow_html=True)
+    with col_left:
+        st.markdown('<div class="sec-title">--- ELECTRICAL MODEL ---</div>', unsafe_allow_html=True)
+        st.markdown(make_table([
+            ("I_ph_ref :", f"{I_ph_ref:.4f}", "A"),
+            ("V_t_ref :", f"{V_t_ref:.4f}", "V"),
+            ("I_0_ref :", f"{I_0_ref:.4e}", "A"),
+            ("R_s_ref :", f"{R_s_ref:.4f}", "Ω"),
+            ("R_p_ref :", f"{R_p_ref:.4f}", "Ω")
+        ]), unsafe_allow_html=True)
+        
+        st.markdown('<div class="sec-title">=== PHASE 2: DYNAMIC REAL-WORLD PARAMETERS ===</div>', unsafe_allow_html=True)
+        st.markdown(make_table([
+            ("Equivalent Irradiance GE:", f"{elec_final['G_E']:.2f}", "W/m²"),
+            ("I_ph :", f"{elec_final['I_ph']:.4f}", "A"),
+            ("I_0 :", f"{elec_final['I_0']:.4e}", "A"),
+            ("R_s :", f"{elec_final['R_s']:.4f}", "Ω"),
+            ("R_p :", f"{elec_final['R_p']:.4f}", "Ω"),
+            ("V_t :", f"{elec_final['V_t']:.4f}", "V")
+        ]), unsafe_allow_html=True)
+        
+        st.markdown('<div class="sec-title">=== PHASE 3: REAL-WORLD OPERATING MODULE I & V ===</div>', unsafe_allow_html=True)
+        st.markdown(make_table([
+            ("Module Voltage (V):", f"{elec_final['V_mp']:.2f}", "V"),
+            ("Module Current (I):", f"{elec_final['I_mp']:.2f}", "A"),
+            ("Final Module Power (P = I * V):", f"{elec_final['P_PV']:.2f}", "W")
+        ]), unsafe_allow_html=True)
 
-        with row2_right:
-            st.markdown('<div class="sec-title">Rear Irradiance Breakdown</div>', unsafe_allow_html=True)
-            st.markdown(make_table([
-                ("Sky diffuse leakage",   f"{extras['term_sky']:.2f}", "W/m²"),
-                ("Ground reflection",     f"{extras['term_grd']:.2f}", "W/m²"),
-                ("Shaded wall bounce",    f"{extras['term_sh']:.2f}",  "W/m²"),
-                ("Unshaded wall bounce",  f"{extras['term_ush']:.2f}", "W/m²"),
-            ]), unsafe_allow_html=True)
+    with col_right:
+        st.markdown('<div class="sec-title">--- THERMAL MODEL ---</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title">=== FINAL TEMPERATURES ===</div>', unsafe_allow_html=True)
+        st.markdown(make_table([
+            ("Building Wall (Twall):", f"{T_wall_c:.2f}", "°C"),
+            ("Air Gap (Tgap):", f"{T_gap_c:.2f}", "°C"),
+            ("Front Glass (Tg):", f"{T_g_c:.2f}", "°C"),
+            ("Upper EVA (Teva1):", f"{T_eva1_c:.2f}", "°C"),
+            ("PV Silicon (Tpv):", f"{T_pv_c:.2f}", "°C"),
+            ("Lower EVA (Teva2):", f"{T_eva2_c:.2f}", "°C"),
+            ("Rear Glass (Trg):", f"{T_rg_c:.2f}", "°C")
+        ]), unsafe_allow_html=True)
