@@ -253,7 +253,7 @@ def run_thermal_model(G_F, G_R, P_PV, T_initial_array, verbose=False):
 
         return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
 
-    solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='RK45')
+    solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau')
     final_temps = solution.y[:, -1]
 
     if verbose:

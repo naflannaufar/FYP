@@ -125,7 +125,7 @@ def show():
             st.session_state.active_tab = "Optical"
 
         # Version key: bump this to force-reset defaults when they change
-        _DEFAULTS_VERSION = 3
+        _DEFAULTS_VERSION = 4
         defaults = {
             # Optical (matching couple.py exactly)
             'sel_month': 'December',
@@ -490,7 +490,7 @@ def show():
 
             return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
 
-        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='RK45')
+        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau')
         return solution.y[:, -1]
 
     # Coupling Iteration Loop
