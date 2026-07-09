@@ -125,7 +125,7 @@ def show():
             st.session_state.active_tab = "Optical"
 
         # Version key: bump this to force-reset defaults when they change
-        _DEFAULTS_VERSION = 2
+        _DEFAULTS_VERSION = 3
         defaults = {
             # Optical (matching couple.py exactly)
             'sel_month': 'December',
@@ -145,14 +145,14 @@ def show():
             'rho_w': 0.3,                # couple.py: rho_w = 0.3
             
             # Thermal general (matching couple.py exactly)
-            'A': 1.769,                   # couple.py: A = 1.769
+            'A': 2.0,                     # couple.py: A = 2.0
             'T_room_C': 22.0,            # couple.py: T_room_C = 22.0
             'alpha_g': 0.05,             # couple.py: alpha_g = 0.05
             'tau_g': 0.90,               # couple.py: tau_g = 0.90
             'tau_rg': 0.90,              # couple.py: tau_rg = 0.90
             'eps_g': 0.85,               # couple.py: eps_g = 0.85
-            'T_a_C': 30.0,              # couple.py: T_a_C = 30.0
-            'u': 3.5,                    # couple.py: u = 3.5
+            'T_a_C': 25.0,              # couple.py: T_a_C = 25.0
+            'u': 2.0,                    # couple.py: u = 2.0
             
             # Thermal materials (matching couple.py mat dict exactly)
             'mat_g_Cp': 800.0, 'mat_g_rho': 2500.0, 'mat_g_delta': 0.0032, 'mat_g_lam': 1.8,
@@ -161,9 +161,9 @@ def show():
             'mat_wall_Cp': 880.0, 'mat_wall_rho': 2400.0, 'mat_wall_delta': 0.2000, 'mat_wall_lam': 1.5,
             
             # Thermal gap (matching couple.py gap dict exactly)
-            'gap_nu': 1.69e-5,           # couple.py: nu = 1.69e-5
-            'gap_alpha_air': 2.4e-5,     # couple.py: alpha_air = 2.4e-5
-            'gap_k_air': 0.027,          # couple.py: k_air = 0.027
+            'gap_nu': 1.56e-5,           # couple.py: nu = 1.56e-5
+            'gap_alpha_air': 2.21e-5,     # couple.py: alpha_air = 2.21e-5
+            'gap_k_air': 0.0261,          # couple.py: k_air = 0.0261
             
             # Electrical STC (matching couple.py stc dict exactly)
             'Voc_F': 44.5,              # couple.py: Voc_F = 44.5
@@ -202,23 +202,10 @@ def show():
         """, unsafe_allow_html=True)
 
         st.markdown('<div class="section-label">🔧 Parameter Select</div>', unsafe_allow_html=True)
-        col_opt, col_ther, col_elec = st.columns(3)
-        with col_opt:
-            if st.button("Optical", key="param_opt", type="primary" if st.session_state.active_tab == "Optical" else "secondary", use_container_width=True):
-                st.session_state.active_tab = "Optical"
-                st.rerun()
-        with col_ther:
-            if st.button("Thermal", key="param_ther", type="primary" if st.session_state.active_tab == "Thermal" else "secondary", use_container_width=True):
-                st.session_state.active_tab = "Thermal"
-                st.rerun()
-        with col_elec:
-            if st.button("Electrical", key="param_elec", type="primary" if st.session_state.active_tab == "Electrical" else "secondary", use_container_width=True):
-                st.session_state.active_tab = "Electrical"
-                st.rerun()
-
-        # Render active tab's parameters
+        tab_opt, tab_ther, tab_elec = st.tabs(["Optical", "Thermal", "Electrical"])
         month_names = list(calendar.month_name)[1:]
-        if st.session_state.active_tab == "Optical":
+
+        with tab_opt:
             st.markdown('<div class="section-label">① Date & Time</div>', unsafe_allow_html=True)
             col_m, col_d = st.columns(2)
             with col_m:
@@ -228,93 +215,93 @@ def show():
             if st.session_state.sel_day > max_day:
                 st.session_state.sel_day = max_day
             with col_d:
-                st.number_input("Day", min_value=1, max_value=max_day, key='sel_day')
+                st.number_input("Day", min_value=1, max_value=max_day, value=int(st.session_state['sel_day']), key='sel_day')
             
             col_h, col_min = st.columns(2)
             with col_h:
-                st.number_input("Hour", 0, 23, key='hr')
+                st.number_input("Hour", 0, 23, value=int(st.session_state['hr']), key='hr')
             with col_min:
-                st.number_input("Min", 0, 59, key='mn', step=15)
+                st.number_input("Min", 0, 59, value=int(st.session_state['mn']), key='mn', step=15)
             
             st.markdown('<div class="section-label">② Irradiance (W/m²)</div>', unsafe_allow_html=True)
-            st.number_input("GHI – Global Horizontal", 0.0, 1500.0, key='GHI')
-            st.number_input("DHI – Diffuse Horizontal", 0.0, 800.0, key='DHI')
+            st.number_input("GHI – Global Horizontal", 0.0, 1500.0, value=st.session_state['GHI'], key='GHI')
+            st.number_input("DHI – Diffuse Horizontal", 0.0, 800.0, value=st.session_state['DHI'], key='DHI')
             
             st.markdown('<div class="section-label">③ Location</div>', unsafe_allow_html=True)
-            st.number_input("Latitude φ (°)", -90.0, 90.0, key='latitude')
-            st.number_input("Standard Longitude λstd (°)", -180.0, 180.0, key='lambda_std')
-            st.number_input("Local Longitude λlcl (°)", -180.0, 180.0, key='lambda_lcl')
+            st.number_input("Latitude φ (°)", -90.0, 90.0, value=st.session_state['latitude'], key='latitude')
+            st.number_input("Standard Longitude λstd (°)", -180.0, 180.0, value=st.session_state['lambda_std'], key='lambda_std')
+            st.number_input("Local Longitude λlcl (°)", -180.0, 180.0, value=st.session_state['lambda_lcl'], key='lambda_lcl')
             
             st.markdown('<div class="section-label">④ Building Geometry (m)</div>', unsafe_allow_html=True)
-            st.number_input("Building Height Hb", 0.5, 200.0, key='H_b')
-            st.number_input("Panel Bottom Edge h", 0.0, 100.0, key='h')
-            st.number_input("Panel Height Hp", 0.1, 50.0, key='H_p')
-            st.number_input("Panel-to-Wall Distance d", 0.01, 20.0, key='d_val')
+            st.number_input("Building Height Hb", 0.5, 200.0, value=st.session_state['H_b'], key='H_b')
+            st.number_input("Panel Bottom Edge h", 0.0, 100.0, value=st.session_state['h'], key='h')
+            st.number_input("Panel Height Hp", 0.1, 50.0, value=st.session_state['H_p'], key='H_p')
+            st.number_input("Panel-to-Wall Distance d", 0.01, 20.0, value=st.session_state['d_val'], key='d_val')
             
             st.markdown('<div class="section-label">⑤ Albedo</div>', unsafe_allow_html=True)
-            st.number_input("Ground Albedo ρ_grd", 0.0, 1.0, key='rho_grd')
-            st.number_input("Wall Albedo ρ_w", 0.0, 1.0, key='rho_w')
+            st.number_input("Ground Albedo ρ_grd", 0.0, 1.0, value=st.session_state['rho_grd'], key='rho_grd')
+            st.number_input("Wall Albedo ρ_w", 0.0, 1.0, value=st.session_state['rho_w'], key='rho_w')
 
-        elif st.session_state.active_tab == "Thermal":
+        with tab_ther:
             st.markdown('<div class="section-label">① Environment & Area</div>', unsafe_allow_html=True)
-            st.number_input("Panel Area A (m²)", 0.1, 100.0, key='A')
-            st.number_input("Indoor Room Temp (°C)", -50.0, 100.0, key='T_room_C')
-            st.number_input("Ambient Air Temp (°C)", -50.0, 100.0, key='T_a_C')
-            st.number_input("Wind Speed u (m/s)", 0.0, 100.0, key='u')
+            st.number_input("Panel Area A (m²)", 0.1, 100.0, value=st.session_state['A'], key='A')
+            st.number_input("Indoor Room Temp (°C)", -50.0, 100.0, value=st.session_state['T_room_C'], key='T_room_C')
+            st.number_input("Ambient Air Temp (°C)", -50.0, 100.0, value=st.session_state['T_a_C'], key='T_a_C')
+            st.number_input("Wind Speed u (m/s)", 0.0, 100.0, value=st.session_state['u'], key='u')
             
             st.markdown('<div class="section-label">② Glass Properties</div>', unsafe_allow_html=True)
-            st.number_input("Absorptance of glass α_g", 0.0, 1.0, key='alpha_g')
-            st.number_input("Transmittance of front glass τ_g", 0.0, 1.0, key='tau_g')
-            st.number_input("Transmittance of rear glass τ_rg", 0.0, 1.0, key='tau_rg')
-            st.number_input("Emissivity of glass ε_g", 0.0, 1.0, key='eps_g')
+            st.number_input("Absorptance of glass α_g", 0.0, 1.0, value=st.session_state['alpha_g'], key='alpha_g')
+            st.number_input("Transmittance of front glass τ_g", 0.0, 1.0, value=st.session_state['tau_g'], key='tau_g')
+            st.number_input("Transmittance of rear glass τ_rg", 0.0, 1.0, value=st.session_state['tau_rg'], key='tau_rg')
+            st.number_input("Emissivity of glass ε_g", 0.0, 1.0, value=st.session_state['eps_g'], key='eps_g')
             
             st.markdown('<div class="section-label">③ Material Layers</div>', unsafe_allow_html=True)
             with st.expander("Glass layer properties"):
-                st.number_input("Cp (J/kg·K)", value=800.0, key='mat_g_Cp')
-                st.number_input("rho (kg/m³)", value=2500.0, key='mat_g_rho')
-                st.number_input("delta (m)", value=0.0032, key='mat_g_delta', format="%.4f")
-                st.number_input("lambda (W/m·K)", value=1.8, key='mat_g_lam')
+                st.number_input("Cp (J/kg·K)", value=st.session_state['mat_g_Cp'], key='mat_g_Cp')
+                st.number_input("rho (kg/m³)", value=st.session_state['mat_g_rho'], key='mat_g_rho')
+                st.number_input("delta (m)", value=st.session_state['mat_g_delta'], key='mat_g_delta', format="%.4f")
+                st.number_input("lambda (W/m·K)", value=st.session_state['mat_g_lam'], key='mat_g_lam')
                 
             with st.expander("EVA layer properties"):
-                st.number_input("Cp (J/kg·K)", value=2090.0, key='mat_eva_Cp')
-                st.number_input("rho (kg/m³)", value=960.0, key='mat_eva_rho')
-                st.number_input("delta (m)", value=0.0005, key='mat_eva_delta', format="%.5f")
-                st.number_input("lambda (W/m·K)", value=0.31, key='mat_eva_lam')
+                st.number_input("Cp (J/kg·K)", value=st.session_state['mat_eva_Cp'], key='mat_eva_Cp')
+                st.number_input("rho (kg/m³)", value=st.session_state['mat_eva_rho'], key='mat_eva_rho')
+                st.number_input("delta (m)", value=st.session_state['mat_eva_delta'], key='mat_eva_delta', format="%.5f")
+                st.number_input("lambda (W/m·K)", value=st.session_state['mat_eva_lam'], key='mat_eva_lam')
                 
             with st.expander("PV Silicon properties"):
-                st.number_input("Cp (J/kg·K)", value=677.0, key='mat_pv_Cp')
-                st.number_input("rho (kg/m³)", value=2330.0, key='mat_pv_rho')
-                st.number_input("delta (m)", value=0.0002, key='mat_pv_delta', format="%.5f")
-                st.number_input("lambda (W/m·K)", value=148.0, key='mat_pv_lam')
+                st.number_input("Cp (J/kg·K)", value=st.session_state['mat_pv_Cp'], key='mat_pv_Cp')
+                st.number_input("rho (kg/m³)", value=st.session_state['mat_pv_rho'], key='mat_pv_rho')
+                st.number_input("delta (m)", value=st.session_state['mat_pv_delta'], key='mat_pv_delta', format="%.5f")
+                st.number_input("lambda (W/m·K)", value=st.session_state['mat_pv_lam'], key='mat_pv_lam')
                 
             with st.expander("Concrete Wall properties"):
-                st.number_input("Cp (J/kg·K)", value=880.0, key='mat_wall_Cp')
-                st.number_input("rho (kg/m³)", value=2400.0, key='mat_wall_rho')
-                st.number_input("delta (m)", value=0.2000, key='mat_wall_delta', format="%.4f")
-                st.number_input("lambda (W/m·K)", value=1.5, key='mat_wall_lam')
+                st.number_input("Cp (J/kg·K)", value=st.session_state['mat_wall_Cp'], key='mat_wall_Cp')
+                st.number_input("rho (kg/m³)", value=st.session_state['mat_wall_rho'], key='mat_wall_rho')
+                st.number_input("delta (m)", value=st.session_state['mat_wall_delta'], key='mat_wall_delta', format="%.4f")
+                st.number_input("lambda (W/m·K)", value=st.session_state['mat_wall_lam'], key='mat_wall_lam')
 
             st.markdown('<div class="section-label">④ Air Gap Constants</div>', unsafe_allow_html=True)
-            st.number_input("Kinematic viscosity nu (m²/s)", value=1.69e-5, format="%.2e", key='gap_nu')
-            st.number_input("Thermal diffusivity alpha_air (m²/s)", value=2.4e-5, format="%.2e", key='gap_alpha_air')
-            st.number_input("Thermal conductivity k_air (W/m·K)", value=0.027, format="%.3f", key='gap_k_air')
+            st.number_input("Kinematic viscosity nu (m²/s)", value=st.session_state['gap_nu'], format="%.2e", key='gap_nu')
+            st.number_input("Thermal diffusivity alpha_air (m²/s)", value=st.session_state['gap_alpha_air'], format="%.2e", key='gap_alpha_air')
+            st.number_input("Thermal conductivity k_air (W/m·K)", value=st.session_state['gap_k_air'], format="%.4f", key='gap_k_air')
 
-        elif st.session_state.active_tab == "Electrical":
+        with tab_elec:
             st.markdown('<div class="section-label">① Front Panel Datasheet</div>', unsafe_allow_html=True)
-            st.number_input("Voc_F: Open-Circuit Voltage (V)", 0.0, 200.0, key='Voc_F')
-            st.number_input("Isc_F: Short-Circuit Current (A)", 0.0, 50.0, key='Isc_F')
-            st.number_input("Vmp_F: Max Power Voltage (V)", 0.0, 200.0, key='Vmp_F')
-            st.number_input("Imp_F: Max Power Current (A)", 0.0, 50.0, key='Imp_F')
-            st.number_input("Pmax_F: Max Power (W)", 0.0, 1000.0, key='Pmax_F')
+            st.number_input("Voc_F: Open-Circuit Voltage (V)", 0.0, 200.0, value=st.session_state['Voc_F'], key='Voc_F')
+            st.number_input("Isc_F: Short-Circuit Current (A)", 0.0, 50.0, value=st.session_state['Isc_F'], key='Isc_F')
+            st.number_input("Vmp_F: Max Power Voltage (V)", 0.0, 200.0, value=st.session_state['Vmp_F'], key='Vmp_F')
+            st.number_input("Imp_F: Max Power Current (A)", 0.0, 50.0, value=st.session_state['Imp_F'], key='Imp_F')
+            st.number_input("Pmax_F: Max Power (W)", 0.0, 1000.0, value=st.session_state['Pmax_F'], key='Pmax_F')
             
             st.markdown('<div class="section-label">② Rear Panel Datasheet</div>', unsafe_allow_html=True)
-            st.number_input("Isc_R: Short-Circuit Current (A)", 0.0, 50.0, key='Isc_R')
-            st.number_input("Pmax_R: Max Power (W)", 0.0, 1000.0, key='Pmax_R')
+            st.number_input("Isc_R: Short-Circuit Current (A)", 0.0, 50.0, value=st.session_state['Isc_R'], key='Isc_R')
+            st.number_input("Pmax_R: Max Power (W)", 0.0, 1000.0, value=st.session_state['Pmax_R'], key='Pmax_R')
             
             st.markdown('<div class="section-label">③ Coefficients & Tech</div>', unsafe_allow_html=True)
-            st.number_input("alpha_pct: Temp Coeff of Isc (%/°C)", -5.0, 5.0, key='alpha_pct', format="%.3f")
-            st.number_input("beta_pct: Temp Coeff of Voc (%/°C)", -5.0, 5.0, key='beta_pct', format="%.2f")
-            st.number_input("phi: Bifaciality Factor", 0.0, 1.5, key='phi', format="%.2f")
-            st.number_input("Ns: Cells in Series", 1, 500, key='Ns')
+            st.number_input("alpha_pct: Temp Coeff of Isc (%/°C)", -5.0, 5.0, value=st.session_state['alpha_pct'], key='alpha_pct', format="%.3f")
+            st.number_input("beta_pct: Temp Coeff of Voc (%/°C)", -5.0, 5.0, value=st.session_state['beta_pct'], key='beta_pct', format="%.2f")
+            st.number_input("phi: Bifaciality Factor", 0.0, 1.5, value=st.session_state['phi'], key='phi', format="%.2f")
+            st.number_input("Ns: Cells in Series", 1, 500, value=int(st.session_state['Ns']), key='Ns')
 
     # ─── Load state variables for calculations ───────────────────────────────
     sel_month = st.session_state.sel_month
@@ -503,7 +490,7 @@ def show():
 
             return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
 
-        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau', rtol=1e-4, atol=1e-4)
+        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='RK45')
         return solution.y[:, -1]
 
     # Coupling Iteration Loop
@@ -524,7 +511,6 @@ def show():
                 T_PV_new = T_new_array[2]
                 error = abs(T_PV_new - T_PV_old)
                 T_PV_old = T_PV_new
-                T_old_array = list(T_new_array)  # Feed converged temps back
             except Exception as ivp_ex:
                 break
             iteration += 1
@@ -562,14 +548,24 @@ def show():
         <div class="res-value">{GF:.1f}<span class="res-unit"> W/m²</span></div>
       </div>
       <div class="res-item" style="border-left:1px solid rgba(255,255,255,0.25);
-                                   border-right:1px solid rgba(255,255,255,0.25);
-                                   padding:0 32px;">
+                                   padding:0 20px;">
         <div class="res-label">Rear Irradiance GR</div>
         <div class="res-value">{GR:.1f}<span class="res-unit"> W/m²</span></div>
       </div>
-      <div class="res-item">
-        <div class="res-label">Bifacial Total GF+GR</div>
-        <div class="res-value">{GF+GR:.1f}<span class="res-unit"> W/m²</span></div>
+      <div class="res-item" style="border-left:1px solid rgba(255,255,255,0.25);
+                                   padding:0 20px;">
+        <div class="res-label">Equivalent Irradiance</div>
+        <div class="res-value">{elec_final['G_E']:.1f}<span class="res-unit"> W/m²</span></div>
+      </div>
+      <div class="res-item" style="border-left:1px solid rgba(255,255,255,0.25);
+                                   padding:0 20px;">
+        <div class="res-label">Final Module Power</div>
+        <div class="res-value">{elec_final['P_PV']:.1f}<span class="res-unit"> W</span></div>
+      </div>
+      <div class="res-item" style="border-left:1px solid rgba(255,255,255,0.25);
+                                   padding:0 20px;">
+        <div class="res-label">PV Silicon Temp</div>
+        <div class="res-value">{T_pv_c:.1f}<span class="res-unit"> °C</span></div>
       </div>
     </div>
     """, unsafe_allow_html=True)
