@@ -128,21 +128,21 @@ def show():
         _DEFAULTS_VERSION = 4
         defaults = {
             # Optical (matching couple.py exactly)
-            'sel_month': 'December',
-            'sel_day': 12,
+            'sel_month': 'June',
+            'sel_day': 21,
             'hr': 12,
             'mn': 0,
-            'GHI': 800.0,                 # couple.py: GHI = 800
+            'GHI': 600.0,                 # couple.py: GHI = 800
             'DHI': 100.0,                 # couple.py: DHI = 100
             'latitude': 33.7,             # couple.py: latitude = 33.7
             'lambda_std': 75.0,           # couple.py: lambda_std = 75.0
             'lambda_lcl': 72.84,          # couple.py: lambda_lcl = 72.84
-            'H_b': 10.0,                  # couple.py: H_b = 10.0
-            'h': 5.0,                     # couple.py: h = 5
-            'H_p': 2.0,                   # couple.py: H_p = 2.0
+            'H_b': 20.0,                  # couple.py: H_b = 10.0
+            'h': 12.5,                     # couple.py: h = 5
+            'H_p': 1.88,                   # couple.py: H_p = 2.0
             'd_val': 0.2,                 # couple.py: d = 0.2
-            'rho_grd': 0.3,              # couple.py: rho_grd = 0.3
-            'rho_w': 0.3,                # couple.py: rho_w = 0.3
+            'rho_grd': 0.28,              # couple.py: rho_grd = 0.3
+            'rho_w': 0.35,                # couple.py: rho_w = 0.3
             
             # Thermal general (matching couple.py exactly)
             'A': 2.0,                     # couple.py: A = 2.0
@@ -490,7 +490,7 @@ def show():
 
             return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
 
-        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau')
+        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='RK45')
         return solution.y[:, -1]
 
     # Coupling Iteration Loop

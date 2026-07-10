@@ -11,23 +11,23 @@ from scipy.integrate import solve_ivp
 # =====================================================================
 
 # --- A. TIME & WEATHER INPUTS (Outer Loop Drivers) ---
-date_str = "2025-12-12"         # Date
+date_str = "2025-06-21"         # Date
 time_str = "12:00"              # Time (LCT)
-GHI = 800                     # Global Horizontal Irradiance (W/m2)
+GHI = 600                     # Global Horizontal Irradiance (W/m2)
 DHI = 100                     # Diffuse Horizontal Irradiance (W/m2)
-T_a_C = 25.0                    # Ambient Air Temp (Celsius)
-u = 2.0                         # Wind speed (m/s)
+T_a_C = 25                   # Ambient Air Temp (Celsius)
+u = 2                         # Wind speed (m/s)
 
 # --- B. OPTICAL & INSTALLATION INPUTS ---
 latitude = 33.7                # Latitude (φ, degrees)
 lambda_std = 75.0              # Standard Longitude (λstd, degrees)
 lambda_lcl = 72.84             # Local Longitude (λlcl, degrees)
-H_b = 10.0                      # Building Height (Hb, meters)
-h = 5                     # Height from ground to panel's bottom edge (h, meters)
-H_p = 2.0                       # Height of the vertical panel (Hp, meters)
+H_b = 20.0                     # Building Height (Hb, meters)
+h = 12.5                       # Height from ground to panel's bottom edge (h, meters)
+H_p = 1.88                       # Height of the vertical panel (Hp, meters)
 d = 0.2                         # Horizontal distance between panel and wall (d, meters)
-rho_grd = 0.3                   # Ground Albedo (ρ_grd, 0-1)
-rho_w = 0.3                     # Wall Albedo (ρ_w, 0-1)
+rho_grd = 0.28                   # Ground Albedo (ρ_grd, 0-1)
+rho_w = 0.35                     # Wall Albedo (ρ_w, 0-1)
 tilt_angle = 90.0               # Fixed for vertical BIPV
 panel_azimuth = 0.0             # 0 = South
 
@@ -47,7 +47,7 @@ stc = {
 }
 
 # --- D. THERMAL & MATERIAL INPUTS ---
-A = 2.0                         # Panel Area (m2)
+A = 2                       # Panel Area (m2)
 T_room_C = 22.0                 # Indoor room temp (Celsius)
 alpha_g = 0.05                  # Absorptance of glass
 tau_g = 0.90                    # Transmittance of front glass
@@ -253,7 +253,7 @@ def run_thermal_model(G_F, G_R, P_PV, T_initial_array, verbose=False):
 
         return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
 
-    solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau')
+    solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='RK45')
     final_temps = solution.y[:, -1]
 
     if verbose:
