@@ -490,7 +490,8 @@ def show():
 
             return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
 
-        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='RK45')
+        # Radau solver handles stiff equations extremely fast
+        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau')
         return solution.y[:, -1]
 
     # Coupling Iteration Loop
@@ -503,7 +504,7 @@ def show():
     converged = False
 
     with st.spinner("Calculating coupled system convergence..."):
-        while error > 1e-5 and iteration <= max_iterations:
+        while error > 1e-3 and iteration <= max_iterations:
             elec_out = run_electrical_model(GF, GR, T_PV_old)
             P_PV_calculated = elec_out['P_PV']
             try:
@@ -514,7 +515,7 @@ def show():
             except Exception as ivp_ex:
                 break
             iteration += 1
-        if error <= 1e-5:
+        if error <= 1e-3:
             converged = True
 
     elec_final = run_electrical_model(GF, GR, T_PV_old)
