@@ -9,82 +9,296 @@ from scipy.optimize import fsolve, minimize_scalar
 from scipy.integrate import solve_ivp
 
 
+DEG_TO_RAD = math.pi / 180.0
+RAD_TO_DEG = 180.0 / math.pi
+
+def d2r(a):
+    return a * DEG_TO_RAD
+
+def r2d(a):
+    return a * RAD_TO_DEG
+
+def solar_position(date_obj, LCT, latitude, lambda_std, lambda_lcl):
+    n = date_obj.timetuple().tm_yday
+    delta_deg = 23.45 * math.sin(d2r(360.0 * (284 + n) / 365.0))
+    B_rad = d2r(360.0 * (n - 1) / 365.0)
+    EoT = 229.2 * (0.000075 + 0.001868 * math.cos(B_rad) - 0.032077 * math.sin(B_rad)
+                   - 0.014615 * math.cos(2 * B_rad) - 0.04089 * math.sin(2 * B_rad))
+    LST = LCT + (4.0 * (lambda_std - lambda_lcl) + EoT) / 60.0
+    omega_deg = 15.0 * (LST - 12.0)
+    phi_rad, delta_rad, omega_rad = d2r(latitude), d2r(delta_deg), d2r(omega_deg)
+    cos_z = max(-1.0, min(1.0,
+        math.sin(phi_rad) * math.sin(delta_rad) +
+        math.cos(phi_rad) * math.cos(delta_rad) * math.cos(omega_rad)))
+    theta_z = r2d(math.acos(cos_z))
+    return {
+        'n': n, 'delta': delta_deg, 'EoT': EoT, 'LST': LST,
+        'omega': omega_deg, 'cos_z': cos_z, 'theta_z': theta_z,
+        'alpha_s': 90.0 - theta_z
+    }
+
+def aoi_front(sol, latitude, tilt=90.0, panel_az=0.0):
+    d, p, b, g, w = d2r(sol['delta']), d2r(latitude), d2r(tilt), d2r(panel_az), d2r(sol['omega'])
+    sd, cd = math.sin(d), math.cos(d)
+    sp, cp = math.sin(p), math.cos(p)
+    sb, cb = math.sin(b), math.cos(b)
+    sg, cg = math.sin(g), math.cos(g)
+    sw, cw = math.sin(w), math.cos(w)
+    cos_theta_F = (sd*sp*cb) - (sd*cp*sb*cg) + (cd*cp*cb*cw) + (cd*sp*sb*cg*cw) + (cd*sb*sg*sw)
+    return max(-1.0, min(1.0, cos_theta_F))
+
+def view_factors(H_b, h, H_p, d, alpha_s):
+    L = H_b - H_p - h
+    XR_sky = (H_p + math.sqrt(d**2 + L**2) - math.sqrt(d**2 + (H_p + L)**2)) / (2 * H_p)
+    XR_grd = (H_p + math.sqrt(d**2 + h**2) - math.sqrt(d**2 + (H_p + h)**2)) / (2 * H_p)
+    if 0 < alpha_s < 90:
+        Delta = d * math.tan(d2r(alpha_s))
+    elif alpha_s >= 90:
+        Delta = 1e6
+    else:
+        Delta = 0.0
+    t1 = math.sqrt(d**2 + (H_p - Delta)**2)
+    t2 = math.sqrt(d**2 + (H_p + Delta)**2)
+    t3 = 2 * math.sqrt(d**2 + Delta**2)
+    XR_sh_w = max(0.0, min(1.0, (t1 + t2 - t3) / (2 * H_p)))
+    XR_ush_w = max(0.0, 1.0 - XR_sky - XR_grd - XR_sh_w)
+    return {
+        'L': L, 'Delta': Delta,
+        'XF_sky': 0.5, 'XF_grd': 0.5,
+        'XR_sky': XR_sky, 'XR_grd': XR_grd,
+        'XR_sh_w': XR_sh_w, 'XR_ush_w': XR_ush_w
+    }
+
+def compute_irradiance(date_obj, LCT, GHI, DHI, latitude, lambda_std, lambda_lcl,
+                        H_b, h, H_p, d, rho_grd, rho_w):
+    sol = solar_position(date_obj, LCT, latitude, lambda_std, lambda_lcl)
+    if sol['cos_z'] <= 0:
+        return sol, None, None, 0.0, 0.0
+    cos_theta_F = aoi_front(sol, latitude)
+    theta_F = r2d(math.acos(cos_theta_F))
+    RbF = (max(0.0, cos_theta_F) / sol['cos_z']
+           if (-90 <= sol['omega'] <= 90 and sol['cos_z'] > 0) else 0.0)
+    vf = view_factors(H_b, h, H_p, d, sol['alpha_s'])
+    BHI = GHI - DHI
+    GF = (BHI * RbF) + (DHI * vf['XF_sky']) + (GHI * rho_grd * vf['XF_grd'])
+    term_sky = DHI * vf['XR_sky']
+    term_grd = GHI * rho_grd * vf['XR_grd']
+    term_sh  = ((DHI / 2.0) + (GHI * rho_grd / 2.0)) * rho_w * vf['XR_sh_w']
+    term_ush = GF * rho_w * vf['XR_ush_w']
+    GR = term_sky + term_grd + term_sh + term_ush
+    return sol, vf, None, GF, GR
+
+@st.cache_data
+def calculate_daily_bipv_physics(
+    month_idx, sel_day, latitude, lambda_std, lambda_lcl, H_b, h, H_p, d_val, rho_grd, rho_w,
+    A, T_room_C, alpha_g, tau_g, tau_rg, eps_g,
+    mat_g_Cp, mat_g_rho, mat_g_delta, mat_g_lam,
+    mat_eva_Cp, mat_eva_rho, mat_eva_delta, mat_eva_lam,
+    mat_pv_Cp, mat_pv_rho, mat_pv_delta, mat_pv_lam,
+    mat_wall_Cp, mat_wall_rho, mat_wall_delta, mat_wall_lam,
+    gap_nu, gap_alpha_air, gap_k_air,
+    Voc_F, Isc_F, Vmp_F, Imp_F, Pmax_F, Isc_R, Pmax_R, alpha_pct, beta_pct, phi, Ns
+):
+    df_irr = pd.read_csv("Taxila_Irradiance_Data.csv")
+    df_day = df_irr[(df_irr['Month'] == month_idx) & (df_irr['Day'] == int(sel_day))]
+    if df_day.empty:
+        return [], [], [], [], [], [], [], []
+    df_day = df_day.sort_values(by='Hour Taxila')
+
+    stc = {
+        'Voc_F': Voc_F, 'Isc_F': Isc_F, 'Vmp_F': Vmp_F, 'Imp_F': Imp_F, 'Pmax_F': Pmax_F,
+        'Isc_R': Isc_R, 'Pmax_R': Pmax_R, 'alpha_pct': alpha_pct, 'beta_pct': beta_pct, 'phi': phi, 'Ns': Ns
+    }
+    mat = {
+        'g':    {'Cp': mat_g_Cp,  'rho': mat_g_rho,  'delta': mat_g_delta,  'lam': mat_g_lam},
+        'eva':  {'Cp': mat_eva_Cp, 'rho': mat_eva_rho, 'delta': mat_eva_delta, 'lam': mat_eva_lam},
+        'pv':   {'Cp': mat_pv_Cp,  'rho': mat_pv_rho,  'delta': mat_pv_delta,  'lam': mat_pv_lam},
+        'wall': {'Cp': mat_wall_Cp, 'rho': mat_wall_rho, 'delta': mat_wall_delta, 'lam': mat_wall_lam}
+    }
+    gap = {
+        'd': d_val, 'H_p': H_p, 'nu': gap_nu, 'alpha_air': gap_alpha_air, 'k_air': gap_k_air
+    }
+
+    # Precalculate baseline STC
+    q = 1.602e-19
+    K = 1.381e-23
+    E_g = 1.7936e-19
+    T_ref = 298.15
+    G_ref = 1000.0
+    sigma = 5.67e-8
+
+    alpha_abs = (stc['alpha_pct'] / 100.0) * stc['Isc_F']
+    beta_abs  = (stc['beta_pct']  / 100.0) * stc['Voc_F']
+
+    try:
+        I_ph_ref = stc['Isc_F']
+        V_t_ref = (beta_abs * T_ref - stc['Voc_F']) / (stc['Ns'] * T_ref * (alpha_abs / I_ph_ref) - 3 * stc['Ns'] - (E_g * stc['Ns']) / (K * T_ref))
+        I_0_ref = stc['Isc_F'] * np.exp(-stc['Voc_F'] / (stc['Ns'] * V_t_ref))
+
+        def solve_Rs_ref_eq(Rs_guess):
+            num_Rp = (stc['Vmp_F'] - stc['Imp_F'] * Rs_guess) * (stc['Vmp_F'] - stc['Ns'] * V_t_ref)
+            den_Rp = (stc['Vmp_F'] - stc['Imp_F'] * Rs_guess) * (stc['Isc_F'] - stc['Imp_F']) - stc['Ns'] * V_t_ref * stc['Imp_F']
+            Rp_substituted = num_Rp / den_Rp
+            I_calc = I_ph_ref - I_0_ref * (np.exp((stc['Vmp_F'] + stc['Imp_F'] * Rs_guess) / (stc['Ns'] * V_t_ref)) - 1) - ((stc['Vmp_F'] + stc['Imp_F'] * Rs_guess) / Rp_substituted)
+            return I_calc - stc['Imp_F']
+
+        R_s_ref = fsolve(solve_Rs_ref_eq, x0=0.1)[0]
+        R_p_ref = ((stc['Vmp_F'] - stc['Imp_F'] * R_s_ref) * (stc['Vmp_F'] - stc['Ns'] * V_t_ref)) / ((stc['Vmp_F'] - stc['Imp_F'] * R_s_ref) * (stc['Isc_F'] - stc['Imp_F']) - stc['Ns'] * V_t_ref * stc['Imp_F'])
+    except Exception as ex:
+        I_ph_ref = stc['Isc_F']
+        V_t_ref = 0.025
+        I_0_ref = 1e-9
+        R_s_ref = 0.1
+        R_p_ref = 100.0
+
+    def run_electrical_model(G_F, G_R, T_PV_K):
+        G_E = G_F + G_R * stc['phi']
+        if G_E <= 0.01:
+            return {
+                'P_PV': 0.0, 'G_E': G_E, 'I_ph': 0.0, 'I_0': 0.0, 'R_s': R_s_ref, 'R_p': 1e6, 'V_t': 0.0,
+                'V_mp': 0.0, 'I_mp': 0.0
+            }
+
+        I_ph = (G_E / G_ref) * (I_ph_ref + alpha_abs * (T_PV_K - T_ref))
+        I_0 = I_0_ref * ((T_PV_K / T_ref)**3) * np.exp((E_g / K) * ((1/T_ref) - (1/T_PV_K)))
+        R_p = (G_ref / G_E) * R_p_ref
+        V_t = (T_PV_K / T_ref) * V_t_ref
+
+        def current_eq_23(I, V):
+            return I_ph - I_0 * (np.exp((V + I * R_s_ref) / (stc['Ns'] * V_t)) - 1) - ((V + I * R_s_ref) / R_p) - I
+
+        def find_mpp(V):
+            try:
+                I_solved = fsolve(current_eq_23, x0=I_ph, args=(V,))[0]
+            except:
+                I_solved = 0.0
+            return -(I_solved * V)
+
+        estimated_Voc = stc['Ns'] * V_t * np.log((I_ph / I_0) + 1)
+        if not np.isfinite(estimated_Voc) or estimated_Voc <= 0:
+            return {
+                'P_PV': 0.0, 'G_E': G_E, 'I_ph': I_ph, 'I_0': I_0, 'R_s': R_s_ref, 'R_p': R_p, 'V_t': V_t,
+                'V_mp': 0.0, 'I_mp': 0.0
+            }
+        result = minimize_scalar(find_mpp, bounds=(0, estimated_Voc), method='bounded')
+        P_PV = -result.fun
+        V_mp = result.x
+        try:
+            I_mp = fsolve(current_eq_23, x0=I_ph, args=(V_mp,))[0]
+        except:
+            I_mp = 0.0
+
+        return {
+            'P_PV': P_PV, 'G_E': G_E, 'I_ph': I_ph, 'I_0': I_0, 'R_s': R_s_ref, 'R_p': R_p, 'V_t': V_t,
+            'V_mp': V_mp, 'I_mp': I_mp
+        }
+
+    # Thermal masses
+    M_g = mat['g']['Cp'] * mat['g']['delta'] * mat['g']['rho'] * A
+    M_eva = mat['eva']['Cp'] * mat['eva']['delta'] * mat['eva']['rho'] * A
+    M_pv = mat['pv']['Cp'] * mat['pv']['delta'] * mat['pv']['rho'] * A
+    M_wall = mat['wall']['Cp'] * mat['wall']['delta'] * mat['wall']['rho'] * A
+
+    def R_cond(mat1, mat2):
+        return (mat[mat1]['delta'] / (2 * mat[mat1]['lam'] * A)) + (mat[mat2]['delta'] / (2 * mat[mat2]['lam'] * A))
+
+    R_EVA1_g = R_cond('eva', 'g')
+    R_PV_EVA1 = R_cond('pv', 'eva')
+    R_PV_EVA2 = R_cond('pv', 'eva')
+    R_EVA2_rg = R_cond('eva', 'g')
+    R_cond_wall = mat['wall']['delta'] / (mat['wall']['lam'] * A)
+
+    def calculate_h_gap(T_rg_K, T_a_K):
+        delta_T = T_rg_K - T_a_K
+        if delta_T <= 0.01: return gap['k_air'] / gap['d']
+        Tf = T_a_K + 0.25 * delta_T
+        Ra_b = ((9.81 * (1.0 / Tf) * delta_T * (gap['d'] ** 3)) / (gap['nu'] * gap['alpha_air'])) * (gap['d'] / gap['H_p'])
+        Nu_b = ((144.0 / (Ra_b ** 2)) + (2.873 / (Ra_b ** 0.5))) ** (-0.5)
+        return (Nu_b * gap['k_air']) / gap['d']
+
+    def run_thermal_model(G_F, G_R, P_PV, T_initial_array, T_a, u, T_room):
+        def bipv_derivatives(t, T_array):
+            T_g, T_eva1, T_pv, T_eva2, T_rg, T_wall = T_array
+            T_gap = (T_rg + T_wall) / 2.0
+            T_sky = 0.0552 * (T_a ** 1.5)
+
+            h_rad_g = eps_g * sigma * (T_sky**2 + T_g**2) * (T_sky + T_g)
+            h_conv_g = 2.8 + 3.0 * u
+            h_rad_rg = eps_g * sigma * (T_wall**2 + T_rg**2) * (T_wall + T_rg)
+            h_gap_conv = calculate_h_gap(T_rg, T_a)
+
+            R_rad_g, R_conv_g = 1.0 / (h_rad_g * A), 1.0 / (h_conv_g * A)
+            R_rad_rg, R_conv_rg = 1.0 / (h_rad_rg * A), 1.0 / (h_gap_conv * A)
+
+            dTg_dt = (alpha_g * G_F * A + (T_eva1 - T_g)/R_EVA1_g - (T_g - T_a)/R_conv_g - (T_g - T_sky)/R_rad_g) / M_g
+            dTeva1_dt = ((T_pv - T_eva1)/R_PV_EVA1 - (T_eva1 - T_g)/R_EVA1_g) / M_eva
+            dTpv_dt = (((tau_g * (G_F + G_R) * A) - P_PV) - (T_pv - T_eva1)/R_PV_EVA1 - (T_pv - T_eva2)/R_PV_EVA2 )/ M_pv
+            dTeva2_dt = ((T_pv - T_eva2)/R_PV_EVA2 - (T_eva2 - T_rg)/R_EVA2_rg) / M_eva
+            dTrg_dt = (alpha_g * G_R * A + (T_eva2 - T_rg)/R_EVA2_rg - (T_rg - T_gap)/R_conv_rg - (T_rg - T_wall)/R_rad_rg) / M_g
+            dTwall_dt = ((T_rg - T_wall)/R_rad_rg + h_gap_conv * A * (T_gap - T_wall) - (T_wall - T_room)/R_cond_wall) / M_wall
+
+            return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
+
+        # Radau solver handles stiff equations extremely fast
+        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau')
+        return solution.y[:, -1]
+
+    sel_date_lcl = date(2025, month_idx, int(sel_day))
+    hours, ghi_list, dhi_list, gf_list, gr_list, gt_list = [], [], [], [], [], []
+    tpv_list, power_list = [], []
+
+    for _, row in df_day.iterrows():
+        h_taxila = row['Hour Taxila']
+        g_h  = row['G(h)']
+        gd_h = row['Gd(h)']
+        
+        # 1. Optical calculations
+        _, _, _, curr_gf, curr_gr = compute_irradiance(
+            sel_date_lcl, h_taxila, g_h, gd_h, latitude, lambda_std, lambda_lcl,
+            H_b, h, H_p, d_val, rho_grd, rho_w)
+        
+        # 2. Weather conditions from CSV for this hour
+        curr_T_a_C = row['T2m']
+        curr_T_a = curr_T_a_C + 273.15
+        curr_u = row['WS10m']
+        curr_T_room = T_room_C + 273.15
+        
+        # 3. Coupled physical solver loop (resetting state to ambient each hour)
+        T_old_array = [curr_T_a, curr_T_a, curr_T_a, curr_T_a, curr_T_a, curr_T_a]
+        T_PV_old = T_old_array[2]
+        
+        error = 100.0
+        iteration = 1
+        max_iterations = 50
+        
+        while error > 1e-3 and iteration <= max_iterations:
+            elec_out = run_electrical_model(curr_gf, curr_gr, T_PV_old)
+            P_PV_calculated = elec_out['P_PV']
+            try:
+                T_new_array = run_thermal_model(curr_gf, curr_gr, P_PV_calculated, T_old_array, curr_T_a, curr_u, curr_T_room)
+                T_PV_new = T_new_array[2]
+                error = abs(T_PV_new - T_PV_old)
+                T_PV_old = T_PV_new
+            except Exception as ivp_ex:
+                break
+            iteration += 1
+        
+        elec_final = run_electrical_model(curr_gf, curr_gr, T_PV_old)
+        
+        hours.append(int(h_taxila))
+        ghi_list.append(round(g_h,   2))
+        dhi_list.append(round(gd_h,  2))
+        gf_list.append(round(curr_gf, 2))
+        gr_list.append(round(curr_gr, 2))
+        gt_list.append(round(curr_gf + curr_gr, 2))
+        
+        # Store temperature and power outputs
+        tpv_list.append(round(T_PV_old - 273.15, 2))
+        power_list.append(round(elec_final['P_PV'], 2))
+
+    return hours, ghi_list, dhi_list, gf_list, gr_list, gt_list, tpv_list, power_list
+
 def show():
-    DEG_TO_RAD = math.pi / 180.0
-    RAD_TO_DEG = 180.0 / math.pi
-    def d2r(a): return a * DEG_TO_RAD
-    def r2d(a): return a * RAD_TO_DEG
-
-    def solar_position(date_obj, LCT, latitude, lambda_std, lambda_lcl):
-        n = date_obj.timetuple().tm_yday
-        delta_deg = 23.45 * math.sin(d2r(360.0 * (284 + n) / 365.0))
-        B_rad = d2r(360.0 * (n - 1) / 365.0)
-        EoT = 229.2 * (0.000075 + 0.001868 * math.cos(B_rad) - 0.032077 * math.sin(B_rad)
-                       - 0.014615 * math.cos(2 * B_rad) - 0.04089 * math.sin(2 * B_rad))
-        LST = LCT + (4.0 * (lambda_std - lambda_lcl) + EoT) / 60.0
-        omega_deg = 15.0 * (LST - 12.0)
-        phi_rad, delta_rad, omega_rad = d2r(latitude), d2r(delta_deg), d2r(omega_deg)
-        cos_z = max(-1.0, min(1.0,
-            math.sin(phi_rad) * math.sin(delta_rad) +
-            math.cos(phi_rad) * math.cos(delta_rad) * math.cos(omega_rad)))
-        theta_z = r2d(math.acos(cos_z))
-        return {
-            'n': n, 'delta': delta_deg, 'EoT': EoT, 'LST': LST,
-            'omega': omega_deg, 'cos_z': cos_z, 'theta_z': theta_z,
-            'alpha_s': 90.0 - theta_z
-        }
-
-    def aoi_front(sol, latitude, tilt=90.0, panel_az=0.0):
-        d, p, b, g, w = d2r(sol['delta']), d2r(latitude), d2r(tilt), d2r(panel_az), d2r(sol['omega'])
-        sd, cd = math.sin(d), math.cos(d)
-        sp, cp = math.sin(p), math.cos(p)
-        sb, cb = math.sin(b), math.cos(b)
-        sg, cg = math.sin(g), math.cos(g)
-        sw, cw = math.sin(w), math.cos(w)
-        cos_theta_F = (sd*sp*cb) - (sd*cp*sb*cg) + (cd*cp*cb*cw) + (cd*sp*sb*cg*cw) + (cd*sb*sg*sw)
-        return max(-1.0, min(1.0, cos_theta_F))
-
-    def view_factors(H_b, h, H_p, d, alpha_s):
-        L = H_b - H_p - h
-        XR_sky = (H_p + math.sqrt(d**2 + L**2) - math.sqrt(d**2 + (H_p + L)**2)) / (2 * H_p)
-        XR_grd = (H_p + math.sqrt(d**2 + h**2) - math.sqrt(d**2 + (H_p + h)**2)) / (2 * H_p)
-        if 0 < alpha_s < 90:
-            Delta = d * math.tan(d2r(alpha_s))
-        elif alpha_s >= 90:
-            Delta = 1e6
-        else:
-            Delta = 0.0
-        t1 = math.sqrt(d**2 + (H_p - Delta)**2)
-        t2 = math.sqrt(d**2 + (H_p + Delta)**2)
-        t3 = 2 * math.sqrt(d**2 + Delta**2)
-        XR_sh_w = max(0.0, min(1.0, (t1 + t2 - t3) / (2 * H_p)))
-        XR_ush_w = max(0.0, 1.0 - XR_sky - XR_grd - XR_sh_w)
-        return {
-            'L': L, 'Delta': Delta,
-            'XF_sky': 0.5, 'XF_grd': 0.5,
-            'XR_sky': XR_sky, 'XR_grd': XR_grd,
-            'XR_sh_w': XR_sh_w, 'XR_ush_w': XR_ush_w
-        }
-
-    def compute_irradiance(date_obj, LCT, GHI, DHI, latitude, lambda_std, lambda_lcl,
-                            H_b, h, H_p, d, rho_grd, rho_w):
-        sol = solar_position(date_obj, LCT, latitude, lambda_std, lambda_lcl)
-        if sol['cos_z'] <= 0:
-            return sol, None, None, 0.0, 0.0
-        cos_theta_F = aoi_front(sol, latitude)
-        theta_F = r2d(math.acos(cos_theta_F))
-        RbF = (max(0.0, cos_theta_F) / sol['cos_z']
-               if (-90 <= sol['omega'] <= 90 and sol['cos_z'] > 0) else 0.0)
-        vf = view_factors(H_b, h, H_p, d, sol['alpha_s'])
-        BHI = GHI - DHI
-        GF = (BHI * RbF) + (DHI * vf['XF_sky']) + (GHI * rho_grd * vf['XF_grd'])
-        term_sky = DHI * vf['XR_sky']
-        term_grd = GHI * rho_grd * vf['XR_grd']
-        term_sh  = ((DHI / 2.0) + (GHI * rho_grd / 2.0)) * rho_w * vf['XR_sh_w']
-        term_ush = GF * rho_w * vf['XR_ush_w']
-        GR = term_sky + term_grd + term_sh + term_ush
-        return sol, vf, None, GF, GR
-
     # ── Inject page-level CSS overrides for no-scroll layout ──────────────────
     st.markdown("""
     <style>
@@ -233,24 +447,24 @@ def show():
             st.session_state.active_tab = "Optical"
 
         # Version key: bump this to force-reset defaults when they change
-        _DEFAULTS_VERSION = 4
+        _DEFAULTS_VERSION = 5
         defaults = {
             # Optical
-            'sel_month': 'December',
+            'sel_month': 'June',
             'sel_day': 21,
             'hr': 12,
             'mn': 0,
-            'GHI': 800.0,
+            'GHI': 600.0,
             'DHI': 100.0,
             'latitude': 33.7,
             'lambda_std': 75.0,
             'lambda_lcl': 72.84,
-            'H_b': 10.0,
-            'h': 5.0,
-            'H_p': 2.0,
+            'H_b': 20.0,
+            'h': 12.5,
+            'H_p': 1.88,
             'd_val': 0.2,
-            'rho_grd': 0.3,
-            'rho_w': 0.3,
+            'rho_grd': 0.28,
+            'rho_w': 0.35,
             
             # Thermal general
             'A': 2.0,
@@ -405,219 +619,54 @@ def show():
     tau_rg = st.session_state.tau_rg
     eps_g = st.session_state.eps_g
 
-    mat = {
-        'g':    {'Cp': st.session_state.mat_g_Cp,  'rho': st.session_state.mat_g_rho,  'delta': st.session_state.mat_g_delta,  'lam': st.session_state.mat_g_lam},
-        'eva':  {'Cp': st.session_state.mat_eva_Cp, 'rho': st.session_state.mat_eva_rho, 'delta': st.session_state.mat_eva_delta, 'lam': st.session_state.mat_eva_lam},
-        'pv':   {'Cp': st.session_state.mat_pv_Cp,  'rho': st.session_state.mat_pv_rho,  'delta': st.session_state.mat_pv_delta,  'lam': st.session_state.mat_pv_lam},
-        'wall': {'Cp': st.session_state.mat_wall_Cp, 'rho': st.session_state.mat_wall_rho, 'delta': st.session_state.mat_wall_delta, 'lam': st.session_state.mat_wall_lam}
-    }
+    # Reconstruct variables for cache key
+    mat_g_Cp = st.session_state.mat_g_Cp
+    mat_g_rho = st.session_state.mat_g_rho
+    mat_g_delta = st.session_state.mat_g_delta
+    mat_g_lam = st.session_state.mat_g_lam
+    mat_eva_Cp = st.session_state.mat_eva_Cp
+    mat_eva_rho = st.session_state.mat_eva_rho
+    mat_eva_delta = st.session_state.mat_eva_delta
+    mat_eva_lam = st.session_state.mat_eva_lam
+    mat_pv_Cp = st.session_state.mat_pv_Cp
+    mat_pv_rho = st.session_state.mat_pv_rho
+    mat_pv_delta = st.session_state.mat_pv_delta
+    mat_pv_lam = st.session_state.mat_pv_lam
+    mat_wall_Cp = st.session_state.mat_wall_Cp
+    mat_wall_rho = st.session_state.mat_wall_rho
+    mat_wall_delta = st.session_state.mat_wall_delta
+    mat_wall_lam = st.session_state.mat_wall_lam
 
-    gap = {
-        'd': d_val,
-        'H_p': H_p,
-        'nu': st.session_state.gap_nu,
-        'alpha_air': st.session_state.gap_alpha_air,
-        'k_air': st.session_state.gap_k_air
-    }
+    gap_nu = st.session_state.gap_nu
+    gap_alpha_air = st.session_state.gap_alpha_air
+    gap_k_air = st.session_state.gap_k_air
 
-    stc = {
-        'Voc_F': st.session_state.Voc_F,
-        'Isc_F': st.session_state.Isc_F,
-        'Vmp_F': st.session_state.Vmp_F,
-        'Imp_F': st.session_state.Imp_F,
-        'Pmax_F': st.session_state.Pmax_F,
-        'Isc_R': st.session_state.Isc_R,
-        'Pmax_R': st.session_state.Pmax_R,
-        'alpha_pct': st.session_state.alpha_pct,
-        'beta_pct': st.session_state.beta_pct,
-        'phi': st.session_state.phi,
-        'Ns': st.session_state.Ns
-    }
+    Voc_F = st.session_state.Voc_F
+    Isc_F = st.session_state.Isc_F
+    Vmp_F = st.session_state.Vmp_F
+    Imp_F = st.session_state.Imp_F
+    Pmax_F = st.session_state.Pmax_F
+    Isc_R = st.session_state.Isc_R
+    Pmax_R = st.session_state.Pmax_R
+    alpha_pct = st.session_state.alpha_pct
+    beta_pct = st.session_state.beta_pct
+    phi = st.session_state.phi
+    Ns = st.session_state.Ns
 
-    q = 1.602e-19                   # Electron charge (C)
-    K = 1.381e-23                   # Boltzmann constant (J/K)
-    E_g = 1.7936e-19                # Band gap energy of Silicon (J)
-    T_ref = 298.15                  # STC Reference Temp (25 C in Kelvin)
-    G_ref = 1000.0                  # STC Reference Irradiance (W/m2)
-    sigma = 5.67e-8                 # Stefan-Boltzmann constant (W/m2K4)
+    sel_day = int(st.session_state.sel_day)
+    sel_date = date(2025, month_idx, sel_day)
 
-    alpha_abs = (stc['alpha_pct'] / 100.0) * stc['Isc_F']
-    beta_abs  = (stc['beta_pct']  / 100.0) * stc['Voc_F']
-
-    # Precalculate baseline STC
-    try:
-        I_ph_ref = stc['Isc_F']
-        V_t_ref = (beta_abs * T_ref - stc['Voc_F']) / (stc['Ns'] * T_ref * (alpha_abs / I_ph_ref) - 3 * stc['Ns'] - (E_g * stc['Ns']) / (K * T_ref))
-        I_0_ref = stc['Isc_F'] * np.exp(-stc['Voc_F'] / (stc['Ns'] * V_t_ref))
-
-        def solve_Rs_ref_eq(Rs_guess):
-            num_Rp = (stc['Vmp_F'] - stc['Imp_F'] * Rs_guess) * (stc['Vmp_F'] - stc['Ns'] * V_t_ref)
-            den_Rp = (stc['Vmp_F'] - stc['Imp_F'] * Rs_guess) * (stc['Isc_F'] - stc['Imp_F']) - stc['Ns'] * V_t_ref * stc['Imp_F']
-            Rp_substituted = num_Rp / den_Rp
-            I_calc = I_ph_ref - I_0_ref * (np.exp((stc['Vmp_F'] + stc['Imp_F'] * Rs_guess) / (stc['Ns'] * V_t_ref)) - 1) - ((stc['Vmp_F'] + stc['Imp_F'] * Rs_guess) / Rp_substituted)
-            return I_calc - stc['Imp_F']
-
-        R_s_ref = fsolve(solve_Rs_ref_eq, x0=0.1)[0]
-        R_p_ref = ((stc['Vmp_F'] - stc['Imp_F'] * R_s_ref) * (stc['Vmp_F'] - stc['Ns'] * V_t_ref)) / ((stc['Vmp_F'] - stc['Imp_F'] * R_s_ref) * (stc['Isc_F'] - stc['Imp_F']) - stc['Ns'] * V_t_ref * stc['Imp_F'])
-    except Exception as ex:
-        I_ph_ref = stc['Isc_F']
-        V_t_ref = 0.025
-        I_0_ref = 1e-9
-        R_s_ref = 0.1
-        R_p_ref = 100.0
-
-    def run_electrical_model(G_F, G_R, T_PV_K):
-        G_E = G_F + G_R * stc['phi']
-        if G_E <= 0.01:
-            return {
-                'P_PV': 0.0, 'G_E': G_E, 'I_ph': 0.0, 'I_0': 0.0, 'R_s': R_s_ref, 'R_p': 1e6, 'V_t': 0.0,
-                'V_mp': 0.0, 'I_mp': 0.0
-            }
-
-        I_ph = (G_E / G_ref) * (I_ph_ref + alpha_abs * (T_PV_K - T_ref))
-        I_0 = I_0_ref * ((T_PV_K / T_ref)**3) * np.exp((E_g / K) * ((1/T_ref) - (1/T_PV_K)))
-        R_p = (G_ref / G_E) * R_p_ref
-        V_t = (T_PV_K / T_ref) * V_t_ref
-
-        def current_eq_23(I, V):
-            return I_ph - I_0 * (np.exp((V + I * R_s_ref) / (stc['Ns'] * V_t)) - 1) - ((V + I * R_s_ref) / R_p) - I
-
-        def find_mpp(V):
-            try:
-                I_solved = fsolve(current_eq_23, x0=I_ph, args=(V,))[0]
-            except:
-                I_solved = 0.0
-            return -(I_solved * V)
-
-        estimated_Voc = stc['Ns'] * V_t * np.log((I_ph / I_0) + 1)
-        if not np.isfinite(estimated_Voc) or estimated_Voc <= 0:
-            return {
-                'P_PV': 0.0, 'G_E': G_E, 'I_ph': I_ph, 'I_0': I_0, 'R_s': R_s_ref, 'R_p': R_p, 'V_t': V_t,
-                'V_mp': 0.0, 'I_mp': 0.0
-            }
-        result = minimize_scalar(find_mpp, bounds=(0, estimated_Voc), method='bounded')
-        P_PV = -result.fun
-        V_mp = result.x
-        try:
-            I_mp = fsolve(current_eq_23, x0=I_ph, args=(V_mp,))[0]
-        except:
-            I_mp = 0.0
-
-        return {
-            'P_PV': P_PV, 'G_E': G_E, 'I_ph': I_ph, 'I_0': I_0, 'R_s': R_s_ref, 'R_p': R_p, 'V_t': V_t,
-            'V_mp': V_mp, 'I_mp': I_mp
-        }
-
-    # Thermal masses
-    M_g = mat['g']['Cp'] * mat['g']['delta'] * mat['g']['rho'] * A
-    M_eva = mat['eva']['Cp'] * mat['eva']['delta'] * mat['eva']['rho'] * A
-    M_pv = mat['pv']['Cp'] * mat['pv']['delta'] * mat['pv']['rho'] * A
-    M_wall = mat['wall']['Cp'] * mat['wall']['delta'] * mat['wall']['rho'] * A
-
-    def R_cond(mat1, mat2):
-        return (mat[mat1]['delta'] / (2 * mat[mat1]['lam'] * A)) + (mat[mat2]['delta'] / (2 * mat[mat2]['lam'] * A))
-
-    R_EVA1_g = R_cond('eva', 'g')
-    R_PV_EVA1 = R_cond('pv', 'eva')
-    R_PV_EVA2 = R_cond('pv', 'eva')
-    R_EVA2_rg = R_cond('eva', 'g')
-    R_cond_wall = mat['wall']['delta'] / (mat['wall']['lam'] * A)
-
-    def calculate_h_gap(T_rg_K, T_a_K):
-        delta_T = T_rg_K - T_a_K
-        if delta_T <= 0.01: return gap['k_air'] / gap['d']
-        Tf = T_a_K + 0.25 * delta_T
-        Ra_b = ((9.81 * (1.0 / Tf) * delta_T * (gap['d'] ** 3)) / (gap['nu'] * gap['alpha_air'])) * (gap['d'] / gap['H_p'])
-        Nu_b = ((144.0 / (Ra_b ** 2)) + (2.873 / (Ra_b ** 0.5))) ** (-0.5)
-        return (Nu_b * gap['k_air']) / gap['d']
-
-    def run_thermal_model(G_F, G_R, P_PV, T_initial_array, T_a, u, T_room):
-        def bipv_derivatives(t, T_array):
-            T_g, T_eva1, T_pv, T_eva2, T_rg, T_wall = T_array
-            T_gap = (T_rg + T_wall) / 2.0
-            T_sky = 0.0552 * (T_a ** 1.5)
-
-            h_rad_g = eps_g * sigma * (T_sky**2 + T_g**2) * (T_sky + T_g)
-            h_conv_g = 2.8 + 3.0 * u
-            h_rad_rg = eps_g * sigma * (T_wall**2 + T_rg**2) * (T_wall + T_rg)
-            h_gap_conv = calculate_h_gap(T_rg, T_a)
-
-            R_rad_g, R_conv_g = 1.0 / (h_rad_g * A), 1.0 / (h_conv_g * A)
-            R_rad_rg, R_conv_rg = 1.0 / (h_rad_rg * A), 1.0 / (h_gap_conv * A)
-
-            dTg_dt = (alpha_g * G_F * A + (T_eva1 - T_g)/R_EVA1_g - (T_g - T_a)/R_conv_g - (T_g - T_sky)/R_rad_g) / M_g
-            dTeva1_dt = ((T_pv - T_eva1)/R_PV_EVA1 - (T_eva1 - T_g)/R_EVA1_g) / M_eva
-            dTpv_dt = (((tau_g * (G_F + G_R) * A) - P_PV) - (T_pv - T_eva1)/R_PV_EVA1 - (T_pv - T_eva2)/R_PV_EVA2 )/ M_pv
-            dTeva2_dt = ((T_pv - T_eva2)/R_PV_EVA2 - (T_eva2 - T_rg)/R_EVA2_rg) / M_eva
-            dTrg_dt = (alpha_g * G_R * A + (T_eva2 - T_rg)/R_EVA2_rg - (T_rg - T_gap)/R_conv_rg - (T_rg - T_wall)/R_rad_rg) / M_g
-            dTwall_dt = ((T_rg - T_wall)/R_rad_rg + h_gap_conv * A * (T_gap - T_wall) - (T_wall - T_room)/R_cond_wall) / M_wall
-
-            return [dTg_dt, dTeva1_dt, dTpv_dt, dTeva2_dt, dTrg_dt, dTwall_dt]
-
-        solution = solve_ivp(bipv_derivatives, (0, 3600), T_initial_array, method='Radau')
-        return solution.y[:, -1]
-
-    @st.cache_data
-    def load_irradiance_data():
-        return pd.read_csv("Taxila_Irradiance_Data.csv")
-
-    df_irr = load_irradiance_data()
-    df_day = df_irr[(df_irr['Month'] == month_idx) & (df_irr['Day'] == int(st.session_state.sel_day))]
-    if not df_day.empty:
-        df_day = df_day.sort_values(by='Hour Taxila')
-
-    hours, ghi_list, dhi_list, gf_list, gr_list, gt_list = [], [], [], [], [], []
-    tpv_list, power_list = [], []
-    
-    if not df_day.empty:
-        with st.spinner("Calculating hourly BIPV coupled physics..."):
-            for _, row in df_day.iterrows():
-                h_taxila = row['Hour Taxila']
-                g_h  = row['G(h)']
-                gd_h = row['Gd(h)']
-                
-                # 1. Optical calculations
-                _, _, _, curr_gf, curr_gr = compute_irradiance(
-                    sel_date, h_taxila, g_h, gd_h, latitude, lambda_std, lambda_lcl,
-                    H_b, h, H_p, d_val, rho_grd, rho_w)
-                
-                # 2. Weather conditions from CSV for this hour
-                curr_T_a_C = row['T2m']
-                curr_T_a = curr_T_a_C + 273.15
-                curr_u = row['WS10m']
-                curr_T_room = T_room_C + 273.15
-                
-                # 3. Coupled physical solver loop (resetting state to ambient each hour)
-                T_old_array = [curr_T_a, curr_T_a, curr_T_a, curr_T_a, curr_T_a, curr_T_a]
-                T_PV_old = T_old_array[2]
-                error = 100.0
-                iteration = 1
-                max_iterations = 50
-                
-                while error > 1e-5 and iteration <= max_iterations:
-                    elec_out = run_electrical_model(curr_gf, curr_gr, T_PV_old)
-                    P_PV_calculated = elec_out['P_PV']
-                    try:
-                        T_new_array = run_thermal_model(curr_gf, curr_gr, P_PV_calculated, T_old_array, curr_T_a, curr_u, curr_T_room)
-                        T_PV_new = T_new_array[2]
-                        error = abs(T_PV_new - T_PV_old)
-                        T_PV_old = T_PV_new
-                    except Exception as ivp_ex:
-                        break
-                    iteration += 1
-                
-                elec_final = run_electrical_model(curr_gf, curr_gr, T_PV_old)
-                
-                hours.append(int(h_taxila))
-                ghi_list.append(round(g_h,   2))
-                dhi_list.append(round(gd_h,  2))
-                gf_list.append(round(curr_gf, 2))
-                gr_list.append(round(curr_gr, 2))
-                gt_list.append(round(curr_gf + curr_gr, 2))
-                
-                # Store temperature and power outputs
-                tpv_list.append(round(T_PV_old - 273.15, 2))
-                power_list.append(round(elec_final['P_PV'], 2))
+    # Execute cached function (module-level)
+    hours, ghi_list, dhi_list, gf_list, gr_list, gt_list, tpv_list, power_list = calculate_daily_bipv_physics(
+        month_idx, sel_day, latitude, lambda_std, lambda_lcl, H_b, h, H_p, d_val, rho_grd, rho_w,
+        A, T_room_C, alpha_g, tau_g, tau_rg, eps_g,
+        mat_g_Cp, mat_g_rho, mat_g_delta, mat_g_lam,
+        mat_eva_Cp, mat_eva_rho, mat_eva_delta, mat_eva_lam,
+        mat_pv_Cp, mat_pv_rho, mat_pv_delta, mat_pv_lam,
+        mat_wall_Cp, mat_wall_rho, mat_wall_delta, mat_wall_lam,
+        gap_nu, gap_alpha_air, gap_k_air,
+        Voc_F, Isc_F, Vmp_F, Imp_F, Pmax_F, Isc_R, Pmax_R, alpha_pct, beta_pct, phi, Ns
+    )
 
     # ── Header strip ──────────────────────────────────────────────────────────
     st.markdown(
@@ -636,7 +685,7 @@ def show():
     </div>
     """, unsafe_allow_html=True)
 
-    if df_day.empty:
+    if len(hours) == 0:
         st.warning("No data available for the selected date.")
         return
 
